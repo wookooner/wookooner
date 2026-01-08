@@ -24,6 +24,14 @@ interface RawEvent {
   type: 'page_view';
 }
 
+// Chapter 2: Aggregated State
+interface DomainState {
+  domain: string;
+  first_seen: number;
+  last_seen: number;
+  visit_count_total: number;
+}
+
 interface AppSettings {
   collectionEnabled: boolean;
   maxEvents: number;
@@ -34,7 +42,6 @@ interface AppSettings {
 const isExtensionEnv = typeof chrome !== 'undefined' && !!chrome.storage && !!chrome.storage.local;
 
 // --- API ABSTRACTION ---
-// This allows the same UI code to run in the Web Preview (Mock) and the Real Extension.
 
 const api = {
   get: (keys: string[]) => {
@@ -61,7 +68,7 @@ const api = {
         Object.entries(items).forEach(([k, v]) => {
           localStorage.setItem(k, JSON.stringify(v));
         });
-        window.dispatchEvent(new Event('storage')); // Trigger update
+        window.dispatchEvent(new Event('storage')); 
         resolve();
       });
     }
@@ -71,37 +78,37 @@ const api = {
 // --- Constants ---
 const EVENTS_KEY = 'pdtm_events_v1';
 const SETTINGS_KEY = 'pdtm_settings_v1';
+const DOMAIN_STATE_KEY = 'pdtm_domain_state_v1'; // Chapter 2
 
 
 // --- COMPONENT: Popup UI ---
 
 const Popup = () => {
   const [events, setEvents] = useState<RawEvent[]>([]);
+  const [domainStates, setDomainStates] = useState<Record<string, DomainState>>({});
   const [settings, setSettings] = useState<AppSettings>({ collectionEnabled: true, maxEvents: 1000 });
   const [activeTab, setActiveTab] = useState<'recent' | 'top'>('recent');
   const [loading, setLoading] = useState(true);
 
   // Load Data
   const refreshData = async () => {
-    const data = await api.get([EVENTS_KEY, SETTINGS_KEY]);
+    const data = await api.get([EVENTS_KEY, SETTINGS_KEY, DOMAIN_STATE_KEY]);
     setEvents(data[EVENTS_KEY] || []);
+    setDomainStates(data[DOMAIN_STATE_KEY] || {});
     if (data[SETTINGS_KEY]) {
       setSettings(data[SETTINGS_KEY]);
     }
     setLoading(false);
   };
 
-  // --- CRITICAL FIX: Real-time Updates ---
-  // In a real extension, we must listen to chrome.storage.onChanged.
-  // In the web preview, we listen to window 'storage' events.
   useEffect(() => {
     refreshData();
 
     if (isExtensionEnv) {
-      // Real Chrome Extension Listener
       const listener = (changes: any, areaName: string) => {
         if (areaName === 'local') {
-          if (changes[EVENTS_KEY] || changes[SETTINGS_KEY]) {
+          // Refresh if events OR domain_state changes
+          if (changes[EVENTS_KEY] || changes[SETTINGS_KEY] || changes[DOMAIN_STATE_KEY]) {
             refreshData();
           }
         }
@@ -109,7 +116,6 @@ const Popup = () => {
       chrome.storage.onChanged.addListener(listener);
       return () => chrome.storage.onChanged.removeListener(listener);
     } else {
-      // Web Preview Listener
       const listener = () => refreshData();
       window.addEventListener('storage', listener);
       return () => window.removeEventListener('storage', listener);
@@ -119,7 +125,10 @@ const Popup = () => {
   // Actions
   const handleClear = async () => {
     if (confirm('Delete all locally stored traces?')) {
-      await api.set({ [EVENTS_KEY]: [] });
+      await api.set({ 
+        [EVENTS_KEY]: [], 
+        [DOMAIN_STATE_KEY]: {} 
+      });
       if (isExtensionEnv) chrome.action.setBadgeText({ text: '' });
       refreshData();
     }
@@ -134,19 +143,31 @@ const Popup = () => {
   };
 
   // Derived State
+  // Chapter 2: Top Sites now comes directly from domain_state
   const topDomains = useMemo(() => {
-    const counts: Record<string, number> = {};
-    events.forEach(e => {
-      counts[e.domain] = (counts[e.domain] || 0) + 1;
-    });
-    return Object.entries(counts)
-      .sort(([, a], [, b]) => b - a)
+    return Object.values(domainStates)
+      .sort((a, b) => b.visit_count_total - a.visit_count_total)
       .slice(0, 10);
-  }, [events]);
+  }, [domainStates]);
 
   const recentEvents = useMemo(() => {
-    return [...events].slice(0, 20); // Storage should already be sorted new -> old
+    return [...events].slice(0, 20); 
   }, [events]);
+
+  // Utility: Time format
+  const formatTime = (ts: number) => {
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const formatRelative = (ts: number) => {
+    const diff = Date.now() - ts;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return new Date(ts).toLocaleDateString();
+  };
 
   if (loading) return <div className="h-full flex items-center justify-center text-slate-400">Loading...</div>;
 
@@ -157,7 +178,7 @@ const Popup = () => {
       <div className="bg-slate-900 text-white p-4 shrink-0 flex justify-between items-center">
         <div className="flex items-center gap-2">
           <Shield size={18} className="text-indigo-400" />
-          <h1 className="font-bold text-sm tracking-wide">PDTM <span className="text-slate-500 text-xs font-normal">v0.1</span></h1>
+          <h1 className="font-bold text-sm tracking-wide">PDTM <span className="text-slate-500 text-xs font-normal">v0.2</span></h1>
         </div>
         <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium border ${settings.collectionEnabled ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-300' : 'bg-amber-500/10 border-amber-500/50 text-amber-300'}`}>
           <div className={`w-1.5 h-1.5 rounded-full ${settings.collectionEnabled ? 'bg-indigo-400 animate-pulse' : 'bg-amber-400'}`} />
@@ -168,12 +189,14 @@ const Popup = () => {
       {/* Stats */}
       <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-end">
         <div>
-          <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider mb-1">Total Traces</p>
-          <div className="text-3xl font-bold text-slate-800 leading-none">{events.length}</div>
+          <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider mb-1">Total Visits</p>
+          <div className="text-3xl font-bold text-slate-800 leading-none">
+            {Object.values(domainStates).reduce((acc, curr) => acc + curr.visit_count_total, 0)}
+          </div>
         </div>
         <div className="text-xs text-slate-400 text-right">
           <p>Local Storage Only</p>
-          <p>No Cloud Upload</p>
+          <p>Domains Tracked: {Object.keys(domainStates).length}</p>
         </div>
       </div>
 
@@ -195,43 +218,61 @@ const Popup = () => {
 
       {/* List */}
       <div className="flex-1 overflow-y-auto bg-white p-0 scrollbar-thin">
-        {events.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center">
-            <Activity size={32} className="mb-2 opacity-20" />
-            <p className="text-sm">No traces collected.</p>
-          </div>
-        ) : activeTab === 'recent' ? (
-          <ul className="divide-y divide-slate-100">
-            {recentEvents.map((e, i) => (
-              <li key={e.ts + '_' + i} className="p-3 hover:bg-slate-50 flex items-center gap-3 group animate-in fade-in slide-in-from-bottom-1 duration-200">
-                <div className="bg-slate-100 p-1.5 rounded text-slate-500">
-                  <Globe size={14} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-slate-800 truncate" title={e.domain}>{e.domain}</div>
-                  <div className="text-xs text-slate-400 font-mono">
-                    {new Date(e.ts).toLocaleTimeString()}
+        {activeTab === 'recent' ? (
+          events.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center">
+              <Activity size={32} className="mb-2 opacity-20" />
+              <p className="text-sm">No recent traces.</p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {recentEvents.map((e, i) => (
+                <li key={e.ts + '_' + i} className="p-3 hover:bg-slate-50 flex items-center gap-3 group animate-in fade-in slide-in-from-bottom-1 duration-200">
+                  <div className="bg-slate-100 p-1.5 rounded text-slate-500">
+                    <Globe size={14} />
                   </div>
-                </div>
-              </li>
-            ))}
-          </ul>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-slate-800 truncate" title={e.domain}>{e.domain}</div>
+                    <div className="text-xs text-slate-400 font-mono">
+                      {formatTime(e.ts)}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )
         ) : (
-          <ul className="divide-y divide-slate-100">
-            {topDomains.map(([domain, count], i) => (
-              <li key={domain} className="p-3 hover:bg-slate-50 flex items-center justify-between group">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className={`text-xs font-mono w-5 h-5 flex items-center justify-center rounded ${i < 3 ? 'bg-indigo-100 text-indigo-700 font-bold' : 'bg-slate-100 text-slate-500'}`}>
-                    {i + 1}
+          topDomains.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center">
+              <BarChart2 size={32} className="mb-2 opacity-20" />
+              <p className="text-sm">No domain stats yet.</p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {topDomains.map((state, i) => (
+                <li key={state.domain} className="p-3 hover:bg-slate-50 flex items-center justify-between group">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className={`text-xs font-mono w-5 h-5 flex items-center justify-center rounded ${i < 3 ? 'bg-indigo-100 text-indigo-700 font-bold' : 'bg-slate-100 text-slate-500'}`}>
+                      {i + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-800 truncate">{state.domain}</div>
+                      <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                        {/* Green dot if active in last 24h */}
+                        {(Date.now() - state.last_seen < 86400000) && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-400" title="Active recently"></span>
+                        )}
+                        Last: {formatRelative(state.last_seen)}
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded-full">
+                    {state.visit_count_total}
                   </span>
-                  <span className="text-sm font-medium text-slate-800 truncate">{domain}</span>
-                </div>
-                <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded-full">
-                  {count}
-                </span>
-              </li>
-            ))}
-          </ul>
+                </li>
+              ))}
+            </ul>
+          )
         )}
       </div>
 
@@ -258,8 +299,6 @@ const Popup = () => {
 };
 
 // --- SIMULATOR TOOL (Only for this Web Preview) ---
-// This component simulates the chrome.storage.local behavior in the web browser
-// allowing you to test the logic without loading the unpacked extension.
 
 const DevSimulator = () => {
   const [simUrl, setSimUrl] = useState('https://www.google.com/search?q=test');
@@ -269,24 +308,43 @@ const DevSimulator = () => {
       const url = new URL(simUrl);
       if (!['http:', 'https:'].includes(url.protocol)) return alert('Invalid protocol');
       const domain = url.hostname;
+      const timestamp = Date.now();
       
-      const data = await api.get([EVENTS_KEY, SETTINGS_KEY]);
+      const data = await api.get([EVENTS_KEY, SETTINGS_KEY, DOMAIN_STATE_KEY]);
       const settings = data[SETTINGS_KEY] || { collectionEnabled: true, maxEvents: 1000 };
       if (!settings.collectionEnabled) return alert('Collection Paused');
 
       const events = data[EVENTS_KEY] || [];
-      const newEvent = { ts: Date.now(), domain, type: 'page_view' };
-      
-      // Dedupe Logic (Simple)
-      if (events.length > 0 && events[0].domain === domain && (Date.now() - events[0].ts < 2000)) {
-        console.log("Dedupe in Simulator");
-        return;
+      const stateMap = data[DOMAIN_STATE_KEY] || {};
+
+      // 1. Dedupe Events
+      if (events.length > 0 && events[0].domain === domain && (timestamp - events[0].ts < 2000)) {
+        return console.log("Dedupe in Simulator");
       }
 
-      const updated = [newEvent, ...events].slice(0, settings.maxEvents);
-      await api.set({ [EVENTS_KEY]: updated });
+      // 2. Update Events
+      const newEvent = { ts: timestamp, domain, type: 'page_view' };
+      const updatedEvents = [newEvent, ...events].slice(0, settings.maxEvents);
+      
+      // 3. Update Domain State (Simulated Logic)
+      const record = stateMap[domain] || {
+        domain: domain,
+        first_seen: timestamp,
+        last_seen: 0,
+        visit_count_total: 0
+      };
+      record.last_seen = timestamp;
+      record.visit_count_total += 1;
+      stateMap[domain] = record;
+
+      // 4. Save
+      await api.set({ 
+        [EVENTS_KEY]: updatedEvents,
+        [DOMAIN_STATE_KEY]: stateMap
+      });
+      
     } catch (e) {
-      alert('Invalid URL');
+      alert('Invalid URL: ' + e);
     }
   };
 
@@ -297,8 +355,7 @@ const DevSimulator = () => {
         <h3 className="font-bold text-sm">Dev Simulator</h3>
       </div>
       <p className="text-xs text-slate-300 mb-3">
-        <b>Web Preview Mode:</b> Use this to generate data.<br/>
-        In the real extension, <code>service_worker.js</code> handles this.
+        <b>Chapter 2 Active:</b> Simulates updating both raw logs AND domain state aggregation.
       </p>
       <input 
         value={simUrl} 
@@ -323,8 +380,6 @@ const App = () => {
       <div className="w-[360px] h-[500px] shadow-2xl relative">
         <Popup />
       </div>
-      
-      {/* Show Simulator only if not in real chrome extension */}
       {!isExtensionEnv && <DevSimulator />}
     </div>
   );
