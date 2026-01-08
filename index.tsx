@@ -10,7 +10,10 @@ import {
   BarChart2, 
   Globe, 
   AlertCircle,
-  Construction
+  Construction,
+  Settings as SettingsIcon,
+  Save,
+  Eraser
 } from 'lucide-react';
 
 // Declare chrome to avoid TS errors
@@ -24,7 +27,6 @@ interface RawEvent {
   type: 'page_view';
 }
 
-// Chapter 2: Aggregated State
 interface DomainState {
   domain: string;
   first_seen: number;
@@ -35,6 +37,13 @@ interface DomainState {
 interface AppSettings {
   collectionEnabled: boolean;
   maxEvents: number;
+}
+
+// Chapter 3: Retention Policy
+interface RetentionPolicy {
+  raw_events_ttl_days: number;
+  prune_inactive_domains_days: number;
+  last_cleanup_ts: number;
 }
 
 // --- ENVIRONMENT DETECTION ---
@@ -78,8 +87,14 @@ const api = {
 // --- Constants ---
 const EVENTS_KEY = 'pdtm_events_v1';
 const SETTINGS_KEY = 'pdtm_settings_v1';
-const DOMAIN_STATE_KEY = 'pdtm_domain_state_v1'; // Chapter 2
+const DOMAIN_STATE_KEY = 'pdtm_domain_state_v1';
+const POLICY_KEY = 'pdtm_retention_policy_v1'; // Chapter 3
 
+const DEFAULT_POLICY: RetentionPolicy = {
+  raw_events_ttl_days: 30,
+  prune_inactive_domains_days: 180,
+  last_cleanup_ts: 0
+};
 
 // --- COMPONENT: Popup UI ---
 
@@ -87,17 +102,20 @@ const Popup = () => {
   const [events, setEvents] = useState<RawEvent[]>([]);
   const [domainStates, setDomainStates] = useState<Record<string, DomainState>>({});
   const [settings, setSettings] = useState<AppSettings>({ collectionEnabled: true, maxEvents: 1000 });
-  const [activeTab, setActiveTab] = useState<'recent' | 'top'>('recent');
+  const [policy, setPolicy] = useState<RetentionPolicy>(DEFAULT_POLICY);
+  
+  const [activeTab, setActiveTab] = useState<'recent' | 'top' | 'settings'>('recent');
   const [loading, setLoading] = useState(true);
 
   // Load Data
   const refreshData = async () => {
-    const data = await api.get([EVENTS_KEY, SETTINGS_KEY, DOMAIN_STATE_KEY]);
+    const data = await api.get([EVENTS_KEY, SETTINGS_KEY, DOMAIN_STATE_KEY, POLICY_KEY]);
     setEvents(data[EVENTS_KEY] || []);
     setDomainStates(data[DOMAIN_STATE_KEY] || {});
     if (data[SETTINGS_KEY]) {
       setSettings(data[SETTINGS_KEY]);
     }
+    setPolicy({ ...DEFAULT_POLICY, ...data[POLICY_KEY] });
     setLoading(false);
   };
 
@@ -107,8 +125,7 @@ const Popup = () => {
     if (isExtensionEnv) {
       const listener = (changes: any, areaName: string) => {
         if (areaName === 'local') {
-          // Refresh if events OR domain_state changes
-          if (changes[EVENTS_KEY] || changes[SETTINGS_KEY] || changes[DOMAIN_STATE_KEY]) {
+          if (changes[EVENTS_KEY] || changes[SETTINGS_KEY] || changes[DOMAIN_STATE_KEY] || changes[POLICY_KEY]) {
             refreshData();
           }
         }
@@ -124,11 +141,12 @@ const Popup = () => {
 
   // Actions
   const handleClear = async () => {
-    // Clarity: Explicitly state that settings are preserved.
     if (confirm('Permanently delete all tracking history?\n\n- Clears Events\n- Clears Domain Stats\n- PRESERVES your settings')) {
       await api.set({ 
         [EVENTS_KEY]: [], 
-        [DOMAIN_STATE_KEY]: {} 
+        [DOMAIN_STATE_KEY]: {},
+        // Reset last cleanup so it runs again soon if needed, or keep it? 
+        // Let's keep policy as is.
       });
       if (isExtensionEnv) chrome.action.setBadgeText({ text: '' });
       refreshData();
@@ -143,8 +161,54 @@ const Popup = () => {
     refreshData();
   };
 
+  const handlePolicyChange = async (key: keyof RetentionPolicy, value: number) => {
+    const newPolicy = { ...policy, [key]: value };
+    await api.set({ [POLICY_KEY]: newPolicy });
+    setPolicy(newPolicy); // Optimistic update
+  };
+
+  const handleRunCleanup = async () => {
+    // Manually trigger cleanup logic (Re-implementing logic here or trigger SW)
+    // Since we can't easily call SW functions from Popup in all envs without messaging,
+    // We will implement a simple immediate cleanup here for the UI button.
+    const now = Date.now();
+    let updatedEvents = [...events];
+    let updatedDomains = { ...domainStates };
+    let changed = false;
+
+    // 1. Events TTL
+    if (policy.raw_events_ttl_days > 0) {
+      const cutoff = now - (policy.raw_events_ttl_days * 86400000);
+      const prevLen = updatedEvents.length;
+      updatedEvents = updatedEvents.filter(e => e.ts >= cutoff);
+      if (updatedEvents.length !== prevLen) changed = true;
+    }
+
+    // 2. Domain Pruning
+    if (policy.prune_inactive_domains_days > 0) {
+      const cutoff = now - (policy.prune_inactive_domains_days * 86400000);
+      Object.keys(updatedDomains).forEach(d => {
+        if (updatedDomains[d].last_seen < cutoff) {
+          delete updatedDomains[d];
+          changed = true;
+        }
+      });
+    }
+
+    if (changed) {
+      await api.set({
+        [EVENTS_KEY]: updatedEvents,
+        [DOMAIN_STATE_KEY]: updatedDomains,
+        [POLICY_KEY]: { ...policy, last_cleanup_ts: now }
+      });
+      alert('Cleanup complete.');
+      refreshData();
+    } else {
+      alert('No data needed cleanup based on current policy.');
+    }
+  };
+
   // Derived State
-  // Chapter 2: Top Sites now comes directly from domain_state
   const topDomains = useMemo(() => {
     return Object.values(domainStates)
       .sort((a, b) => b.visit_count_total - a.visit_count_total)
@@ -179,7 +243,7 @@ const Popup = () => {
       <div className="bg-slate-900 text-white p-4 shrink-0 flex justify-between items-center">
         <div className="flex items-center gap-2">
           <Shield size={18} className="text-indigo-400" />
-          <h1 className="font-bold text-sm tracking-wide">PDTM <span className="text-slate-500 text-xs font-normal">v0.2</span></h1>
+          <h1 className="font-bold text-sm tracking-wide">PDTM <span className="text-slate-500 text-xs font-normal">v0.3</span></h1>
         </div>
         <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium border ${settings.collectionEnabled ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-300' : 'bg-amber-500/10 border-amber-500/50 text-amber-300'}`}>
           <div className={`w-1.5 h-1.5 rounded-full ${settings.collectionEnabled ? 'bg-indigo-400 animate-pulse' : 'bg-amber-400'}`} />
@@ -215,11 +279,19 @@ const Popup = () => {
         >
           <BarChart2 size={14} /> Top Sites
         </button>
+        <button 
+          onClick={() => setActiveTab('settings')}
+          className={`flex-1 py-2 text-xs font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'settings' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-white' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}
+        >
+          <SettingsIcon size={14} /> Settings
+        </button>
       </div>
 
-      {/* List */}
+      {/* Content Area */}
       <div className="flex-1 overflow-y-auto bg-white p-0 scrollbar-thin">
-        {activeTab === 'recent' ? (
+        
+        {/* TAB: RECENT */}
+        {activeTab === 'recent' && (
           events.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center">
               <Activity size={32} className="mb-2 opacity-20" />
@@ -242,7 +314,10 @@ const Popup = () => {
               ))}
             </ul>
           )
-        ) : (
+        )}
+
+        {/* TAB: TOP SITES */}
+        {activeTab === 'top' && (
           topDomains.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center">
               <BarChart2 size={32} className="mb-2 opacity-20" />
@@ -259,7 +334,6 @@ const Popup = () => {
                     <div className="min-w-0">
                       <div className="text-sm font-medium text-slate-800 truncate">{state.domain}</div>
                       <div className="text-[10px] text-slate-400 flex items-center gap-1">
-                        {/* Green dot if active in last 24h */}
                         {(Date.now() - state.last_seen < 86400000) && (
                           <span className="w-1.5 h-1.5 rounded-full bg-green-400" title="Active recently"></span>
                         )}
@@ -275,6 +349,71 @@ const Popup = () => {
             </ul>
           )
         )}
+
+        {/* TAB: SETTINGS (Chapter 3) */}
+        {activeTab === 'settings' && (
+          <div className="p-4 space-y-6">
+            
+            {/* Log Retention */}
+            <div>
+              <div className="flex items-center gap-2 mb-2 text-slate-800 font-medium text-sm">
+                <Clock size={16} className="text-indigo-500" />
+                Raw Log Retention
+              </div>
+              <p className="text-xs text-slate-500 mb-3">
+                How long to keep detailed visit logs (timestamps).
+              </p>
+              <select 
+                value={policy.raw_events_ttl_days}
+                onChange={(e) => handlePolicyChange('raw_events_ttl_days', Number(e.target.value))}
+                className="w-full p-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:border-indigo-500"
+              >
+                <option value={7}>7 Days</option>
+                <option value={30}>30 Days (Recommended)</option>
+                <option value={90}>90 Days</option>
+                <option value={0}>Forever (No Auto-Delete)</option>
+              </select>
+            </div>
+
+            {/* Domain Pruning */}
+            <div>
+              <div className="flex items-center gap-2 mb-2 text-slate-800 font-medium text-sm">
+                <Trash2 size={16} className="text-indigo-500" />
+                Prune Inactive Services
+              </div>
+              <p className="text-xs text-slate-500 mb-3">
+                Forget summary stats for domains you haven't visited in a while.
+              </p>
+              <select 
+                value={policy.prune_inactive_domains_days}
+                onChange={(e) => handlePolicyChange('prune_inactive_domains_days', Number(e.target.value))}
+                className="w-full p-2 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:border-indigo-500"
+              >
+                <option value={90}>90 Days</option>
+                <option value={180}>6 Months (Recommended)</option>
+                <option value={365}>1 Year</option>
+                <option value={0}>Never Prune</option>
+              </select>
+            </div>
+
+            {/* Manual Action */}
+            <div className="pt-2 border-t border-slate-100">
+               <div className="flex justify-between items-center mb-2">
+                 <span className="text-xs text-slate-400">
+                   Last Cleanup: {policy.last_cleanup_ts ? formatRelative(policy.last_cleanup_ts) : 'Never'}
+                 </span>
+               </div>
+               <button 
+                onClick={handleRunCleanup}
+                className="w-full py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold hover:bg-indigo-100 flex items-center justify-center gap-2"
+               >
+                 <Eraser size={14} /> Run Cleanup Now
+               </button>
+            </div>
+
+          </div>
+        )}
+
       </div>
 
       {/* Footer */}
@@ -292,7 +431,7 @@ const Popup = () => {
           onClick={handleClear}
           className="flex-1 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-medium hover:bg-red-50 hover:text-red-600 hover:border-red-200 flex items-center justify-center gap-1.5 transition-colors active:scale-95"
         >
-          <Trash2 size={14} /> Clear
+          <Trash2 size={14} /> Clear Data
         </button>
       </div>
     </div>
@@ -356,7 +495,8 @@ const DevSimulator = () => {
         <h3 className="font-bold text-sm">Dev Simulator</h3>
       </div>
       <p className="text-xs text-slate-300 mb-3">
-        <b>Chapter 2 Active:</b> Simulates updating both raw logs AND domain state aggregation.
+        <b>Chapter 3 Active:</b> Automated Retention Policy.<br/>
+        Cleanup runs periodically on visits.
       </p>
       <input 
         value={simUrl} 

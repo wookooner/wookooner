@@ -1,8 +1,10 @@
 // --- Chapter 2: Service Worker (Background Script) ---
 // Role: Sensor & Storage Coordinator
 // Logic: Navigation -> Filter -> Dedupe -> Store Event -> Update Domain State
+// Updated for Chapter 3: Triggers Retention Check
 
 import { updateDomainState } from './storage/domain_state.js';
+import { performRetentionCheck } from './jobs/retention_job.js';
 
 const SETTINGS_KEY = 'pdtm_settings_v1';
 const EVENTS_KEY = 'pdtm_events_v1';
@@ -92,6 +94,12 @@ chrome.webNavigation.onCompleted.addListener((details) => {
     } else {
       chrome.action.setBadgeText({ text: '' });
     }
+
+    // D. Chapter 3: Retention Check
+    // Opportunistically check if cleanup is needed.
+    // We await this to ensure it respects the queue lock (no parallel storage writes).
+    // The job itself throttles (checks interval) so it's cheap to call often.
+    await performRetentionCheck(chrome.storage.local);
 
   }).catch(err => {
     console.error("PDTM Service Worker Error:", err);
