@@ -2,7 +2,7 @@
 // Role: Logic Engine (Activity + Stats + Overrides -> Risk Score)
 // Calculates "Management Necessity Score" (0-100)
 
-import { ActivityLevel } from '../signals/activity_levels.js';
+import { ActivityLevels } from '../signals/activity_levels.js';
 import { RISK_REASONS, CATEGORIES } from '../signals/risk_reasons.js';
 import { ACTIVITY_STATE_KEY } from '../storage/activity_state.js';
 import { DOMAIN_STATE_KEY } from '../storage/domain_state.js';
@@ -41,18 +41,18 @@ export async function updateRiskForDomain(domain, storageAPI) {
   // 2. Base Score from Activity Level
   let score = 5; // Default View baseline
   const reasons = [];
-  const level = activityState?.last_estimation_level || ActivityLevel.VIEW;
+  const level = activityState?.last_estimation_level || ActivityLevels.VIEW;
 
   switch (level) {
-    case ActivityLevel.TRANSACTION:
+    case ActivityLevels.TRANSACTION:
       score = 70;
       reasons.push(RISK_REASONS.LEVEL_TRANSACTION);
       break;
-    case ActivityLevel.UGC:
+    case ActivityLevels.UGC:
       score = 45;
       reasons.push(RISK_REASONS.LEVEL_UGC);
       break;
-    case ActivityLevel.ACCOUNT:
+    case ActivityLevels.ACCOUNT:
       score = 30;
       reasons.push(RISK_REASONS.LEVEL_ACCOUNT);
       break;

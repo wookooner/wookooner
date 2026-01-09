@@ -2,7 +2,7 @@
 // Role: Vocabulary for Classification Logic
 // Used for UI explanation and debugging.
 
-export const SIGNAL_CODES = {
+export const SIGNAL_CODES = Object.freeze({
   // URL Based
   URL_LOGIN: "url_login",           // 'login', 'signin'
   URL_SIGNUP: "url_signup",         // 'signup', 'register'
@@ -17,4 +17,4 @@ export const SIGNAL_CODES = {
   
   // Default
   PASSIVE: "passive_view"
-};
+});

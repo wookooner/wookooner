@@ -2,24 +2,26 @@
 // Role: Logic Engine (Signals -> Estimation)
 // Pure functions only. No storage access.
 
-import { ActivityLevel, ActivityEstimation } from './activity_levels.js';
+import { ActivityLevels } from './activity_levels.js';
 import { SIGNAL_CODES } from './signal_codes.js';
 
 /**
  * Evaluates a list of signals to determine the activity level.
  * Priority: TRANSACTION > UGC > ACCOUNT > VIEW
+ * @param {string[]} signals
  */
-export function evaluateSignals(signals: string[]): ActivityEstimation {
+export function evaluateSignals(signals) {
   const uniqueSignals = new Set(signals);
-  const reasons: string[] = [];
+  const reasons = [];
 
   // 1. Transaction Check
   if (uniqueSignals.has(SIGNAL_CODES.URL_CHECKOUT) || uniqueSignals.has(SIGNAL_CODES.DOM_PAYMENT)) {
-    reasons.push(...Array.from(uniqueSignals).filter(s => 
+    const matched = Array.from(uniqueSignals).filter(s => 
       s === SIGNAL_CODES.URL_CHECKOUT || s === SIGNAL_CODES.DOM_PAYMENT
-    ));
+    );
+    reasons.push(...matched);
     return {
-      level: ActivityLevel.TRANSACTION,
+      level: ActivityLevels.TRANSACTION,
       confidence: uniqueSignals.size > 1 ? "high" : "medium",
       reasons
     };
@@ -27,11 +29,12 @@ export function evaluateSignals(signals: string[]): ActivityEstimation {
 
   // 2. UGC Check
   if (uniqueSignals.has(SIGNAL_CODES.URL_EDITOR) || uniqueSignals.has(SIGNAL_CODES.DOM_EDITOR)) {
-    reasons.push(...Array.from(uniqueSignals).filter(s => 
+    const matched = Array.from(uniqueSignals).filter(s => 
       s === SIGNAL_CODES.URL_EDITOR || s === SIGNAL_CODES.DOM_EDITOR
-    ));
+    );
+    reasons.push(...matched);
     return {
-      level: ActivityLevel.UGC,
+      level: ActivityLevels.UGC,
       confidence: "medium",
       reasons
     };
@@ -44,11 +47,12 @@ export function evaluateSignals(signals: string[]): ActivityEstimation {
     uniqueSignals.has(SIGNAL_CODES.URL_ACCOUNT) ||
     uniqueSignals.has(SIGNAL_CODES.DOM_PASSWORD)
   ) {
-    reasons.push(...Array.from(uniqueSignals).filter(s => 
+    const matched = Array.from(uniqueSignals).filter(s => 
       [SIGNAL_CODES.URL_LOGIN, SIGNAL_CODES.URL_SIGNUP, SIGNAL_CODES.URL_ACCOUNT, SIGNAL_CODES.DOM_PASSWORD].includes(s)
-    ));
+    );
+    reasons.push(...matched);
     return {
-      level: ActivityLevel.ACCOUNT,
+      level: ActivityLevels.ACCOUNT,
       confidence: "high",
       reasons
     };
@@ -56,7 +60,7 @@ export function evaluateSignals(signals: string[]): ActivityEstimation {
 
   // 4. Default: View
   return {
-    level: ActivityLevel.VIEW,
+    level: ActivityLevels.VIEW,
     confidence: "high",
     reasons: [SIGNAL_CODES.PASSIVE]
   };
@@ -64,9 +68,11 @@ export function evaluateSignals(signals: string[]): ActivityEstimation {
 
 /**
  * Analyzes URL string for keyword signals
+ * @param {string} urlStr
+ * @returns {string[]}
  */
-export function extractUrlSignals(urlStr: string): string[] {
-  const signals: string[] = [];
+export function extractUrlSignals(urlStr) {
+  const signals = [];
   try {
     const url = new URL(urlStr);
     const path = url.pathname.toLowerCase();

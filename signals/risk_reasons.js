@@ -2,7 +2,7 @@
 // Role: Vocabulary for Attention Score calculation
 // Used for UI explanation.
 
-export const RISK_REASONS = {
+export const RISK_REASONS = Object.freeze({
   // Activity Level Based
   LEVEL_TRANSACTION: "level_transaction", // High impact
   LEVEL_ACCOUNT: "level_account",         // Moderate impact
@@ -22,22 +22,22 @@ export const RISK_REASONS = {
   CAT_SHOPPING: "cat_shopping",
   CAT_SOCIAL: "cat_social",
   CAT_OTHER: "cat_other"
-};
+});
 
-export const CATEGORIES = {
+export const CATEGORIES = Object.freeze({
   FINANCE: "finance",
   AUTH: "auth",
   SHOPPING: "shopping",
   SOCIAL: "social",
   CLOUD: "cloud",
   OTHER: "other"
-};
+});
 
-export const CATEGORY_LABELS = {
+export const CATEGORY_LABELS = Object.freeze({
   [CATEGORIES.FINANCE]: "Finance / Banking",
   [CATEGORIES.AUTH]: "Identity / SSO",
   [CATEGORIES.SHOPPING]: "Shopping",
   [CATEGORIES.SOCIAL]: "Social Media",
   [CATEGORIES.CLOUD]: "Cloud / Infra",
   [CATEGORIES.OTHER]: "Other"
-};
+});

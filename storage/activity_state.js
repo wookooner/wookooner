@@ -2,7 +2,7 @@
 // Role: SSOT for Activity Classification Aggregates
 // Stores "What kind of actions" happen on a domain.
 
-import { ActivityLevel } from '../signals/activity_levels.js';
+import { ActivityLevels } from '../signals/activity_levels.js';
 
 export const ACTIVITY_STATE_KEY = 'pdtm_activity_state_v1';
 
@@ -30,13 +30,13 @@ export async function updateActivityState(domain, estimation, timestamp, storage
 
   const record = stateMap[domain] || {
     domain: domain,
-    last_estimation_level: ActivityLevel.VIEW,
+    last_estimation_level: ActivityLevels.VIEW,
     last_estimation_ts: 0,
     counts_by_level: {
-      [ActivityLevel.VIEW]: 0,
-      [ActivityLevel.ACCOUNT]: 0,
-      [ActivityLevel.UGC]: 0,
-      [ActivityLevel.TRANSACTION]: 0
+      [ActivityLevels.VIEW]: 0,
+      [ActivityLevels.ACCOUNT]: 0,
+      [ActivityLevels.UGC]: 0,
+      [ActivityLevels.TRANSACTION]: 0
     }
   };
 
@@ -81,9 +81,9 @@ export async function updateActivityState(domain, estimation, timestamp, storage
   record.last_estimation_ts = timestamp;
 
   // 3. Track specific critical timestamps
-  if (estimation.level === ActivityLevel.ACCOUNT) {
+  if (estimation.level === ActivityLevels.ACCOUNT) {
     record.last_account_touch_ts = timestamp;
-  } else if (estimation.level === ActivityLevel.TRANSACTION) {
+  } else if (estimation.level === ActivityLevels.TRANSACTION) {
     record.last_transaction_signal_ts = timestamp;
   }
 
