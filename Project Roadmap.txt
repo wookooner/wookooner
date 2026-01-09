@@ -1,0 +1,218 @@
+📌 Project Roadmap
+Personal Digital Trace Manager (PDTM)
+
+“내 디지털 흔적을 내가 통제하는 시스템”
+
+0. 프로젝트 핵심 정의 (변하지 않는 원칙)
+🎯 미션
+
+사용자가 자신의 인터넷 활동으로 남는 흔적을 인지·관리·통제할 수 있도록 돕는
+Local-first, Privacy-first 디지털 관리 시스템을 만든다.
+
+🔐 절대 원칙 (Non-Negotiable)
+
+Local-First
+
+사용자 데이터는 기본적으로 로컬에만 존재
+
+Zero Knowledge
+
+개발자/서버는 사용자 데이터 접근 불가
+
+No Raw Sensitive Data Storage
+
+쿠키 값, 세션 토큰, 입력 폼 내용 저장 금지
+
+Single Source of Truth (SSOT)
+
+판단/정리는 Service Worker가 담당
+
+Explainable 판단
+
+“왜 위험한지 / 왜 분류됐는지” 설명 가능해야 함
+
+1️⃣ Phase 1 — Foundation (완료)
+Chapter 1: 기본 수집 & UX
+
+상태: ✅ 완료
+
+목표
+
+브라우저 활동을 안정적으로 수집
+
+실시간 UI 반영
+
+기본 사용자 신뢰 확보
+
+핵심 산출물
+
+Chrome Extension (MV3)
+
+webNavigation 기반 이벤트 수집
+
+Popup UI 실시간 업데이트
+
+Clear / Badge UX
+
+Chapter 2: 집계 구조 & 안정성
+
+상태: ✅ 완료
+
+목표
+
+Raw 로그와 집계 상태 분리
+
+레이스 컨디션 제거
+
+“보는 즉시 이해되는” 요약 데이터
+
+핵심 산출물
+
+domain_state (집계 SSOT)
+
+updateQueue 직렬화
+
+의미 있는 배지 지표 (오늘 이벤트 수)
+
+Clear 동작 명확화
+
+Chapter 3: 자동 관리 & 보존 정책
+
+상태: ✅ 완료
+
+목표
+
+데이터가 자동으로 관리되는 시스템
+
+사용자가 “신경 쓰지 않아도 되는 상태”
+
+핵심 산출물
+
+Retention Policy (TTL, inactivity)
+
+자동 cleanup job
+
+SSOT cleanup (Service Worker)
+
+사용자 설정 UI
+
+cleanup 타임라인 리셋 명확화
+
+2️⃣ Phase 2 — Intelligence (진행 예정)
+Chapter 4: 사용자 행동 분류 (핵심 전환점)
+
+상태: 🔜 다음 챕터
+
+목표
+단순 방문 기록 → “의미 있는 행동 레벨”로 승격
+
+4단계 분류 모델
+
+View-only
+
+Account-touch
+
+User-generated
+
+Transaction
+
+핵심 산출물
+
+Signal 기반 행동 분류 파이프라인
+
+activity_state (행동 집계 SSOT)
+
+URL + DOM 기반 휴리스틱
+
+UI에 Activity Level 표시
+
+⚠️ 이 챕터부터 “보안 도구”가 아니라
+“사용자 인식·의사결정 도구”로 진화
+
+Chapter 5: 위험 점수 & 사용자 인지 UX
+
+상태: ⏳ 예정
+
+목표
+
+“위험하다”가 아니라
+“왜 위험한지 + 어떻게 관리할지” 제시
+
+핵심 산출물
+
+Risk Score 계산 로직
+
+도메인/행동 기반 위험도
+
+“주의 / 관리 필요 / 방치 가능” 구분
+
+Explainable Risk UI
+
+3️⃣ Phase 3 — Control (사용자 통제 강화)
+Chapter 6: 사용자 개입 & 정책 오버라이드
+
+상태: ⏳ 예정
+
+목표
+AI 판단 + 사용자 주권 결합
+
+핵심 산출물
+
+Pin / Ignore / Whitelist
+
+“이 도메인은 절대 잊지 않기”
+
+사용자 판단이 정책보다 우선
+
+Chapter 7: 시계열 & 장기 인식
+
+상태: ⏳ 예정
+
+목표
+
+“과거 → 현재 → 위험 변화” 인식
+
+핵심 산출물
+
+활동 히스토리 타임라인
+
+위험도 변화 추적
+
+“3년 전 흔적” 자동 경고
+
+4️⃣ Phase 4 — 확장 & 고도화 (선택)
+Chapter 8: 로컬 AI 보조 판단 (Optional)
+
+규칙 + LLM 보정
+
+오탐 감소
+
+자연어 설명 생성
+
+Chapter 9: IndexedDB / 성능 확장
+
+대규모 데이터 대응
+
+배치 처리 / 커서 기반 cleanup
+
+Chapter 10: Web3 / Identity 연계 (미래)
+
+DID
+
+지갑 활동 요약
+
+온체인 신원 위험 관리
+
+5️⃣ 진행도 체크용 요약표 (AI 공유용)
+Phase	Chapter	상태
+Foundation	Ch 1	✅
+Foundation	Ch 2	✅
+Foundation	Ch 3	✅
+Intelligence	Ch 4	⏭️
+Intelligence	Ch 5	⏳
+Control	Ch 6	⏳
+Control	Ch 7	⏳
+Expansion	Ch 8+	⏳
+6️⃣ 다른 AI에게 줄 “한 줄 설명”
+
+“이 프로젝트는 Chrome Extension 기반의 Local-first 디지털 흔적 관리 시스템이며, 현재 Chapter 3까지 완료되었고, 다음 목표는 사용자 행동을 4단계로 분류하는 Chapter 4입니다. 판단 SSOT는 Service Worker이며, 개인정보 원문 저장은 금지됩니다.”
