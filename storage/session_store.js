@@ -2,7 +2,7 @@
 // Role: Manage ephemeral session data in chrome.storage.session
 // Implements: Tab Graph (Opener linkage) & Temporal Graph (Time-ordered events)
 
-import { getETLDPlusOne } from '../utils/domain.js';
+import { getDomain, getETLDPlusOne } from '../utils/domain.js';
 
 const KEY_TAB_GRAPH = 'session:tabGraph';
 const KEY_TEMPORAL_GRAPH = 'session:temporalGraph';
@@ -84,8 +84,13 @@ export async function recordTabOpener(targetTabId, sourceTabId, overwrite = fals
  */
 export async function recordTemporalEvent({ tabId, url, kind }) {
   // 1. Prepare Data
-  const domain = getETLDPlusOne(new URL(url).hostname);
+  // Use getDomain to safely parse URL. Avoid direct new URL(url) calls.
+  const hostname = getDomain(url);
+  if (!hostname) return;
+
+  const domain = getETLDPlusOne(hostname);
   if (!domain) return;
+  
   const now = Date.now();
 
   // 2. Load Graphs
@@ -107,6 +112,8 @@ export async function recordTemporalEvent({ tabId, url, kind }) {
   // 4. Update Temporal Graph
   const contextData = tempGraph[contextId] || { events: [], updatedAt: 0 };
   
+  // CRITICAL: Explicitly construct object to ensure 'url' is NOT stored.
+  // Privacy Constraint: Only eTLD+1 domain is stored.
   const newEvent = {
     ts: now,
     domain: domain,

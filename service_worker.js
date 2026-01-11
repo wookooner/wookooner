@@ -18,7 +18,7 @@ import { getDomain } from './utils/domain.js';
 
 // Chapter 1 Imports
 import { recordTabOpener, recordTemporalEvent } from './storage/session_store.js';
-import { startupCleanupSessionStore, handleTabRemoval } from './storage/session_gc.js';
+import { startupCleanupSessionStore, handleTabRemoval, pruneExpiredSessionData } from './storage/session_gc.js';
 import { EVENT_KINDS } from './signals/event_sources.js';
 
 // Promise Chain for Serialization (Mutex-like behavior)
@@ -63,7 +63,8 @@ chrome.runtime.onStartup.addListener(() => {
 
 // Chapter 1: Tab Removal Tracking
 chrome.tabs.onRemoved.addListener((tabId) => {
-  handleTabRemoval(tabId);
+  // Ensure we handle errors and serialized cleanup where possible
+  handleTabRemoval(tabId).catch(err => console.error("[PDTM] Tab Removal Error:", err));
 });
 
 // Chapter 1: Opener Detection (High Reliability)
@@ -81,14 +82,19 @@ chrome.webNavigation.onCompleted.addListener((details) => {
     // Filter: Main Frame only
     if (details.frameId !== 0) return;
 
-    // Chapter 1: Record Session Event
-    // We record 'completed' as a strong signal for Temporal Graph
+    // Chapter 1: Record Session Event (Serialized in Queue)
     if (details.url) {
       await recordTemporalEvent({
         tabId: details.tabId,
         url: details.url,
         kind: EVENT_KINDS.COMPLETED
       });
+      
+      // Chapter 1: Opportunistic GC (Probabilistic, e.g., 10%)
+      // Keeps session store clean during active usage
+      if (Math.random() < 0.1) {
+        await pruneExpiredSessionData();
+      }
     }
 
     const domain = getDomain(details.url);
@@ -152,22 +158,30 @@ chrome.webNavigation.onCompleted.addListener((details) => {
 }, { url: [{ schemes: ['http', 'https'] }] });
 
 // Chapter 1: Additional Navigation Events for Session Graph
-chrome.webNavigation.onCommitted.addListener(async (details) => {
+// Fix: Added Serialization via updateQueue to prevent race conditions
+
+chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId !== 0) return;
-  await recordTemporalEvent({
-    tabId: details.tabId,
-    url: details.url,
-    kind: EVENT_KINDS.COMMITTED
-  });
+  
+  updateQueue = updateQueue.then(async () => {
+    await recordTemporalEvent({
+      tabId: details.tabId,
+      url: details.url,
+      kind: EVENT_KINDS.COMMITTED
+    });
+  }).catch(err => console.error("[PDTM] onCommitted Error:", err));
 });
 
-chrome.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
+chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
   if (details.frameId !== 0) return;
-  await recordTemporalEvent({
-    tabId: details.tabId,
-    url: details.url,
-    kind: EVENT_KINDS.HISTORY
-  });
+
+  updateQueue = updateQueue.then(async () => {
+    await recordTemporalEvent({
+      tabId: details.tabId,
+      url: details.url,
+      kind: EVENT_KINDS.HISTORY
+    });
+  }).catch(err => console.error("[PDTM] onHistory Error:", err));
 });
 
 // 4. Message Listener (UI & Content Scripts)

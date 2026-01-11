@@ -2,7 +2,7 @@
 // Role: Extract and normalize domain names for privacy-safe storage.
 
 /**
- * Extracts the hostname from a URL string.
+ * Extracts the hostname from a URL string safely.
  * @param {string} urlStr 
  * @returns {string|null}
  */
@@ -10,6 +10,7 @@ export function getDomain(urlStr) {
   try {
     if (!urlStr) return null;
     const url = new URL(urlStr);
+    // Strict protocol check to avoid garbage (e.g. 'about:blank', 'chrome://')
     if (!['http:', 'https:'].includes(url.protocol)) return null;
     return url.hostname;
   } catch (e) {
@@ -19,8 +20,13 @@ export function getDomain(urlStr) {
 
 /**
  * Heuristic to estimate eTLD+1 (Effective Top Level Domain + 1).
- * For MVP, we strip common subdomains like 'www', 'm', 'api'.
- * A full Public Suffix List implementation is too heavy for this stage.
+ * [MVP Decision]
+ * Currently, this does NOT implement a full Public Suffix List (PSL).
+ * It strictly performs "Hostname Normalization" by stripping common subdomains (www, m).
+ * 
+ * Limitation: 'accounts.google.com' will remain 'accounts.google.com' instead of 'google.com'.
+ * This is acceptable for Chapter 1 as it preserves privacy (no path/query) and allows basic correlation.
+ * 
  * @param {string} hostname 
  * @returns {string}
  */
@@ -30,8 +36,6 @@ export function getETLDPlusOne(hostname) {
   // 1. Remove common noise subdomains
   let clean = hostname.toLowerCase();
   
-  // Very basic heuristic for standardizing accumulation
-  // (e.g. www.google.com -> google.com)
   const parts = clean.split('.');
   
   // If IP address, return as is

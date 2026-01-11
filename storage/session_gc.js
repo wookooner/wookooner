@@ -8,9 +8,10 @@ const TTL_MS = 60000; // 60 seconds
 const MAX_CONTEXTS = 200;
 
 /**
- * Runs on Service Worker startup to clean stale data.
+ * Core Logic: Prunes expired data from the session store.
+ * Can be called at startup or opportunistically during runtime.
  */
-export async function startupCleanupSessionStore() {
+export async function pruneExpiredSessionData() {
   const data = await chrome.storage.session.get([KEY_TAB_GRAPH, KEY_TEMPORAL_GRAPH]);
   let tabGraph = data[KEY_TAB_GRAPH] || {};
   let tempGraph = data[KEY_TEMPORAL_GRAPH] || {};
@@ -18,7 +19,7 @@ export async function startupCleanupSessionStore() {
   const now = Date.now();
   let changed = false;
 
-  // 1. Clean Temporal Graph by TTL
+  // 1. Clean Temporal Graph by TTL (Opportunistic GC)
   const contextIds = Object.keys(tempGraph);
   contextIds.forEach(ctxId => {
     const entry = tempGraph[ctxId];
@@ -39,7 +40,6 @@ export async function startupCleanupSessionStore() {
   }
 
   // 3. Clean Tab Graph (Stale tabs > 1 hour, probably dead)
-  // tabGraph is less sensitive but shouldn't grow forever.
   const TAB_TTL = 3600000; // 1 hour
   Object.keys(tabGraph).forEach(tid => {
     if (now - tabGraph[tid].lastSeenAt > TAB_TTL) {
@@ -53,33 +53,37 @@ export async function startupCleanupSessionStore() {
       [KEY_TAB_GRAPH]: tabGraph,
       [KEY_TEMPORAL_GRAPH]: tempGraph
     });
+  }
+  return changed;
+}
+
+/**
+ * Runs on Service Worker startup to clean stale data.
+ */
+export async function startupCleanupSessionStore() {
+  const changed = await pruneExpiredSessionData();
+  if (changed) {
     console.log("[PDTM Session] Startup Cleanup Completed.");
   }
 }
 
 /**
  * Handles tab removal event.
- * Removes tab from graph and optionally cleans up empty contexts.
+ * Removes tab from graph and triggers opportunistic GC to prevent accumulation.
  * @param {number} tabId 
  */
 export async function handleTabRemoval(tabId) {
   const data = await chrome.storage.session.get([KEY_TAB_GRAPH, KEY_TEMPORAL_GRAPH]);
   let tabGraph = data[KEY_TAB_GRAPH] || {};
-  let tempGraph = data[KEY_TEMPORAL_GRAPH] || {};
 
   // 1. Remove from Tab Graph
   if (tabGraph[tabId]) {
     delete tabGraph[tabId];
-    // Note: We do NOT delete the node if it's a parent to others? 
-    // For MVP, we delete. Children will become orphans (new roots), which is acceptable 
-    // as the flow is likely broken or finished.
+    await chrome.storage.session.set({ [KEY_TAB_GRAPH]: tabGraph });
   }
 
-  // 2. Remove related events from Temporal Graph?
-  // Actually, we might want to KEEP the events for a bit (TTL) even if tab closes,
-  // because OAuth often closes the popup (tab) immediately after redirect.
-  // Therefore, we do NOT aggressively delete from temporalGraph here.
-  // We strictly rely on TTL in `startupCleanup` or `performRetentionCheck` equivalents.
-  
-  await chrome.storage.session.set({ [KEY_TAB_GRAPH]: tabGraph });
+  // 2. Trigger Opportunistic GC
+  // Since a tab closed, it's a good time to check if any associated temporal chains have expired.
+  // We do not delete immediately (to allow for redirect roundtrips), but we prune expired ones.
+  await pruneExpiredSessionData();
 }
