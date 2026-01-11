@@ -5,6 +5,7 @@
 // Updated for Chapter 4: Activity Classification (Navigation + DOM Signals)
 // Updated for Chapter 5: Risk Calculation & User Overrides
 // Updated for Chapter 6: Centralized Defaults & RESET_ALL Handler
+// Updated for Chapter 1: Session Graph Infrastructure
 
 import { updateDomainState } from './storage/domain_state.js';
 import { performRetentionCheck } from './jobs/retention_job.js';
@@ -13,20 +14,15 @@ import { updateActivityState } from './storage/activity_state.js';
 import { updateRiskForDomain } from './jobs/risk_job.js'; 
 import { updateUserOverride } from './storage/user_overrides.js'; 
 import { KEYS, DEFAULTS } from './storage/defaults.js';
+import { getDomain } from './utils/domain.js';
+
+// Chapter 1 Imports
+import { recordTabOpener, recordTemporalEvent } from './storage/session_store.js';
+import { startupCleanupSessionStore, handleTabRemoval } from './storage/session_gc.js';
+import { EVENT_KINDS } from './signals/event_sources.js';
 
 // Promise Chain for Serialization (Mutex-like behavior)
 let updateQueue = Promise.resolve();
-
-// 1. Utility: Extract Hostname
-const getDomain = (urlStr) => {
-  try {
-    const url = new URL(urlStr);
-    if (!['http:', 'https:'].includes(url.protocol)) return null;
-    return url.hostname;
-  } catch (e) {
-    return null;
-  }
-};
 
 // 2. Init
 chrome.runtime.onInstalled.addListener(async () => {
@@ -55,6 +51,27 @@ chrome.runtime.onInstalled.addListener(async () => {
     await chrome.storage.local.set(missing);
     console.log("[PDTM] Initialized missing storage keys:", Object.keys(missing));
   }
+  
+  // Chapter 1: Session GC on Install/Update
+  await startupCleanupSessionStore();
+});
+
+// Chapter 1: Session GC on Startup
+chrome.runtime.onStartup.addListener(() => {
+  startupCleanupSessionStore();
+});
+
+// Chapter 1: Tab Removal Tracking
+chrome.tabs.onRemoved.addListener((tabId) => {
+  handleTabRemoval(tabId);
+});
+
+// Chapter 1: Opener Detection (High Reliability)
+chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
+  // details.sourceTabId is the opener
+  if (details.sourceTabId && details.tabId) {
+    await recordTabOpener(details.tabId, details.sourceTabId, true);
+  }
 });
 
 // 3. Main Event Listener (Navigation)
@@ -63,6 +80,16 @@ chrome.webNavigation.onCompleted.addListener((details) => {
     
     // Filter: Main Frame only
     if (details.frameId !== 0) return;
+
+    // Chapter 1: Record Session Event
+    // We record 'completed' as a strong signal for Temporal Graph
+    if (details.url) {
+      await recordTemporalEvent({
+        tabId: details.tabId,
+        url: details.url,
+        kind: EVENT_KINDS.COMPLETED
+      });
+    }
 
     const domain = getDomain(details.url);
     if (!domain) return;
@@ -124,6 +151,25 @@ chrome.webNavigation.onCompleted.addListener((details) => {
   });
 }, { url: [{ schemes: ['http', 'https'] }] });
 
+// Chapter 1: Additional Navigation Events for Session Graph
+chrome.webNavigation.onCommitted.addListener(async (details) => {
+  if (details.frameId !== 0) return;
+  await recordTemporalEvent({
+    tabId: details.tabId,
+    url: details.url,
+    kind: EVENT_KINDS.COMMITTED
+  });
+});
+
+chrome.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
+  if (details.frameId !== 0) return;
+  await recordTemporalEvent({
+    tabId: details.tabId,
+    url: details.url,
+    kind: EVENT_KINDS.HISTORY
+  });
+});
+
 // 4. Message Listener (UI & Content Scripts)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
@@ -133,6 +179,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     updateQueue = updateQueue.then(async () => {
       // 1. Wipe Storage
       await chrome.storage.local.clear();
+      // Chapter 1: Also wipe session
+      await chrome.storage.session.clear();
 
       // 2. Restore Defaults (SSOT from defaults.js)
       await chrome.storage.local.set({
