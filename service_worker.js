@@ -30,11 +30,30 @@ const getDomain = (urlStr) => {
 
 // 2. Init
 chrome.runtime.onInstalled.addListener(async () => {
-  const data = await chrome.storage.local.get(KEYS.SETTINGS);
-  if (!data[KEYS.SETTINGS]) {
-    await chrome.storage.local.set({
-      [KEYS.SETTINGS]: DEFAULTS.SETTINGS
-    });
+  // Check all keys defined in DEFAULTS to ensure complete initialization
+  const keysToCheck = Object.values(KEYS);
+  const data = await chrome.storage.local.get(keysToCheck);
+  
+  const missing = {};
+  let hasMissing = false;
+
+  // Iterate over key names (EVENTS, SETTINGS, etc.)
+  for (const keyName of Object.keys(KEYS)) {
+    const storageKey = KEYS[keyName];
+    // If key is completely missing from storage
+    if (data[storageKey] === undefined) {
+      const defaultValue = DEFAULTS[keyName];
+      // If we have a default value for this key
+      if (defaultValue !== undefined) {
+         missing[storageKey] = defaultValue;
+         hasMissing = true;
+      }
+    }
+  }
+
+  if (hasMissing) {
+    await chrome.storage.local.set(missing);
+    console.log("[PDTM] Initialized missing storage keys:", Object.keys(missing));
   }
 });
 

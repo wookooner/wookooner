@@ -28,6 +28,7 @@ import {
 import { ActivityLevels } from '../signals/activity_levels.js';
 import { UI_CONSTANTS } from '../ui/constants.js';
 import { buildHardList, buildSoftList, buildOverviewStats, isManagedDomain } from '../ui/view_models.js';
+import { KEYS, DEFAULTS } from '../storage/defaults.js';
 
 // Declare chrome to avoid TS errors
 declare const chrome: any;
@@ -78,15 +79,6 @@ const api = {
   }
 };
 
-// --- Keys ---
-const EVENTS_KEY = 'pdtm_events_v1';
-const SETTINGS_KEY = 'pdtm_settings_v1';
-const DOMAIN_STATE_KEY = 'pdtm_domain_state_v1';
-const POLICY_KEY = 'pdtm_retention_policy_v1';
-const ACTIVITY_STATE_KEY = 'pdtm_activity_state_v1';
-const RISK_STATE_KEY = 'pdtm_risk_state_v1';
-const USER_OVERRIDES_KEY = 'pdtm_user_overrides_v1';
-
 // --- Helpers ---
 const formatTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const formatRelative = (ts: number) => {
@@ -134,18 +126,19 @@ const Popup = () => {
   const [domainStates, setDomainStates] = useState<Record<string, any>>({});
 
   const loadData = async () => {
-    const keys = [EVENTS_KEY, SETTINGS_KEY, DOMAIN_STATE_KEY, POLICY_KEY, ACTIVITY_STATE_KEY, RISK_STATE_KEY, USER_OVERRIDES_KEY];
-    const data = await api.get(keys);
+    // Dynamically fetch all keys defined in the SSOT
+    const keysToFetch = Object.values(KEYS);
+    const data = await api.get(keysToFetch);
     
-    setEvents(data[EVENTS_KEY] || []);
+    setEvents(data[KEYS.EVENTS] || []);
     // P0-2: Functional update to prevent stale closures, safely merging with defaults/previous
-    setSettings(prev => ({ ...prev, ...(data[SETTINGS_KEY] || {}) }));
+    setSettings(prev => ({ ...prev, ...(data[KEYS.SETTINGS] || {}) }));
     
-    setDomainStates(data[DOMAIN_STATE_KEY] || {});
-    setActivityStates(data[ACTIVITY_STATE_KEY] || {});
-    setRiskStates(data[RISK_STATE_KEY] || {});
-    setOverrides(data[USER_OVERRIDES_KEY] || {});
-    setPolicy(data[POLICY_KEY] || {});
+    setDomainStates(data[KEYS.DOMAIN_STATE] || {});
+    setActivityStates(data[KEYS.ACTIVITY_STATE] || {});
+    setRiskStates(data[KEYS.RISK_STATE] || {});
+    setOverrides(data[KEYS.USER_OVERRIDES] || {});
+    setPolicy(data[KEYS.POLICY] || {});
     setLoading(false);
   };
 
@@ -179,7 +172,7 @@ const Popup = () => {
     setSettings(prev => {
       const newSettings = { ...prev, collectionEnabled: !prev.collectionEnabled };
       // Fire and forget storage update, relying on listener or subsequent loads for sync
-      api.set({ [SETTINGS_KEY]: newSettings });
+      api.set({ [KEYS.SETTINGS]: newSettings });
       return newSettings;
     });
   };
@@ -191,7 +184,7 @@ const Popup = () => {
       // Mock for dev
       const current = overrides[domain] || {};
       const updated = { ...overrides, [domain]: { ...current, ...partial } };
-      await api.set({ [USER_OVERRIDES_KEY]: updated });
+      await api.set({ [KEYS.USER_OVERRIDES]: updated });
       loadData();
     }
   };
@@ -218,16 +211,19 @@ const Popup = () => {
                 alert("Could not communicate with background service.");
             }
         } else {
-            // Preview Mode: Manual Reset
+            // Preview Mode: Manual Reset using SSOT DEFAULTS
             localStorage.clear();
             const defaults = {
-                [EVENTS_KEY]: [], 
-                [DOMAIN_STATE_KEY]: {}, 
-                [ACTIVITY_STATE_KEY]: {}, 
-                [RISK_STATE_KEY]: {},
-                [USER_OVERRIDES_KEY]: {},
-                [POLICY_KEY]: { last_cleanup_ts: 0 },
-                [SETTINGS_KEY]: { collectionEnabled: true, maxEvents: 1000, softThreshold: UI_CONSTANTS.SOFT_THRESHOLD_DEFAULT }
+                [KEYS.EVENTS]: DEFAULTS.EVENTS, 
+                [KEYS.DOMAIN_STATE]: DEFAULTS.DOMAIN_STATE, 
+                [KEYS.ACTIVITY_STATE]: DEFAULTS.ACTIVITY_STATE, 
+                [KEYS.RISK_STATE]: DEFAULTS.RISK_STATE,
+                [KEYS.USER_OVERRIDES]: DEFAULTS.USER_OVERRIDES,
+                [KEYS.POLICY]: DEFAULTS.POLICY, // Already has last_cleanup_ts: 0
+                [KEYS.SETTINGS]: { 
+                  ...DEFAULTS.SETTINGS, 
+                  softThreshold: UI_CONSTANTS.SOFT_THRESHOLD_DEFAULT 
+                }
             };
             await api.set(defaults);
             await loadData();
@@ -546,7 +542,7 @@ const Popup = () => {
                      const val = parseInt(e.target.value) || 0;
                      setSettings(prev => {
                        const newSettings = { ...prev, softThreshold: val };
-                       api.set({ [SETTINGS_KEY]: newSettings });
+                       api.set({ [KEYS.SETTINGS]: newSettings });
                        return newSettings;
                      });
                    }}
