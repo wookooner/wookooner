@@ -7,12 +7,9 @@ import {
   Pause, 
   Play, 
   Clock, 
-  BarChart2, 
+  LayoutDashboard,
   Globe, 
-  AlertCircle,
-  Construction,
   Settings as SettingsIcon,
-  Save,
   Eraser,
   Eye,
   User,
@@ -22,94 +19,39 @@ import {
   Pin,
   CheckCircle,
   EyeOff,
-  Tag
+  Tag,
+  ListFilter,
+  Inbox,
+  Briefcase
 } from 'lucide-react';
+import { ActivityLevels } from '../signals/activity_levels.js';
+import { UI_CONSTANTS } from '../ui/constants.js';
+import { buildHardList, buildSoftList, buildOverviewStats, isManagedDomain } from '../ui/view_models.js';
 
 // Declare chrome to avoid TS errors
 declare const chrome: any;
 
-// --- Types ---
-
+// --- Types (UI Only) ---
 interface RawEvent {
   ts: number;
   domain: string;
   type: 'page_view';
 }
 
-interface DomainState {
-  domain: string;
-  first_seen: number;
-  last_seen: number;
-  visit_count_total: number;
-}
-
 interface AppSettings {
   collectionEnabled: boolean;
   maxEvents: number;
+  softThreshold?: number; // Added for Chapter 6
 }
 
-interface RetentionPolicy {
-  raw_events_ttl_days: number;
-  prune_inactive_domains_days: number;
-  last_cleanup_ts: number;
-}
-
-// Chapter 4: Activity State
-type ActivityLevelType = "view" | "account" | "ugc" | "transaction";
-
-const ActivityLevels: Record<string, ActivityLevelType> = {
-  VIEW: "view",
-  ACCOUNT: "account",
-  UGC: "ugc",
-  TRANSACTION: "transaction"
-};
-
-interface DomainActivityState {
-  domain: string;
-  last_estimation_level: ActivityLevelType;
-  last_estimation_ts: number;
-  counts_by_level: Record<string, number>;
-  last_account_touch_ts?: number;
-  last_transaction_signal_ts?: number;
-}
-
-// Chapter 5: Risk & Overrides
-interface RiskRecord {
-  score: number; // 0-100
-  confidence: string;
-  reasons: string[];
-  last_updated_ts: number;
-}
-
-interface UserOverride {
-  pinned: boolean;
-  whitelisted: boolean;
-  ignored: boolean;
-  category: string | null; // "finance", "auth", etc.
-  updated_ts: number;
-}
-
-const CATEGORY_OPTIONS = [
-  { value: 'finance', label: 'Finance' },
-  { value: 'auth', label: 'Auth/SSO' },
-  { value: 'shopping', label: 'Shopping' },
-  { value: 'social', label: 'Social' },
-  { value: 'cloud', label: 'Cloud' },
-  { value: 'other', label: 'Other' },
-];
-
-// --- ENVIRONMENT DETECTION ---
-
+// --- API ---
 const isExtensionEnv = typeof chrome !== 'undefined' && !!chrome.storage && !!chrome.storage.local;
-
-// --- API ABSTRACTION ---
 
 const api = {
   get: (keys: string[]) => {
     if (isExtensionEnv) {
       return chrome.storage.local.get(keys);
     } else {
-      // Mock for Web Preview
       return new Promise((resolve) => {
         const result: any = {};
         keys.forEach(k => {
@@ -124,7 +66,6 @@ const api = {
     if (isExtensionEnv) {
       return chrome.storage.local.set(items);
     } else {
-      // Mock for Web Preview
       return new Promise<void>((resolve) => {
         Object.entries(items).forEach(([k, v]) => {
           localStorage.setItem(k, JSON.stringify(v));
@@ -136,41 +77,19 @@ const api = {
   }
 };
 
-// --- Constants ---
+// --- Keys ---
 const EVENTS_KEY = 'pdtm_events_v1';
 const SETTINGS_KEY = 'pdtm_settings_v1';
 const DOMAIN_STATE_KEY = 'pdtm_domain_state_v1';
 const POLICY_KEY = 'pdtm_retention_policy_v1';
-const ACTIVITY_STATE_KEY = 'pdtm_activity_state_v1'; // Chapter 4
-const RISK_STATE_KEY = 'pdtm_risk_state_v1'; // Chapter 5
-const USER_OVERRIDES_KEY = 'pdtm_user_overrides_v1'; // Chapter 5
+const ACTIVITY_STATE_KEY = 'pdtm_activity_state_v1';
+const RISK_STATE_KEY = 'pdtm_risk_state_v1';
+const USER_OVERRIDES_KEY = 'pdtm_user_overrides_v1';
 
-const DEFAULT_POLICY: RetentionPolicy = {
-  raw_events_ttl_days: 30,
-  prune_inactive_domains_days: 180,
-  last_cleanup_ts: 0
-};
-
-// --- HELPERS ---
-
-const getActivityIcon = (level: ActivityLevelType | undefined) => {
-  switch (level) {
-    case ActivityLevels.TRANSACTION: return <CreditCard size={12} className="text-rose-500" />;
-    case ActivityLevels.UGC: return <PenTool size={12} className="text-purple-500" />;
-    case ActivityLevels.ACCOUNT: return <User size={12} className="text-blue-500" />;
-    default: return <Eye size={12} className="text-slate-400" />;
-  }
-};
-
-const getRiskColor = (score: number) => {
-  if (score >= 70) return 'bg-rose-100 text-rose-700 border-rose-200';
-  if (score >= 40) return 'bg-amber-100 text-amber-700 border-amber-200';
-  return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-};
-
+// --- Helpers ---
 const formatTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
 const formatRelative = (ts: number) => {
+  if (!ts) return 'Never';
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'Just now';
@@ -180,340 +99,451 @@ const formatRelative = (ts: number) => {
   return new Date(ts).toLocaleDateString();
 };
 
-// --- COMPONENT: Popup UI ---
+const getActivityIcon = (level: string) => {
+  switch (level) {
+    case ActivityLevels.TRANSACTION: return <CreditCard size={14} className="text-rose-500" />;
+    case ActivityLevels.UGC: return <PenTool size={14} className="text-purple-500" />;
+    case ActivityLevels.ACCOUNT: return <User size={14} className="text-blue-500" />;
+    default: return <Eye size={14} className="text-slate-400" />;
+  }
+};
 
+const CATEGORY_OPTIONS = [
+  { value: 'finance', label: 'Finance' },
+  { value: 'auth', label: 'Auth' },
+  { value: 'shopping', label: 'Shopping' },
+  { value: 'social', label: 'Social' },
+  { value: 'cloud', label: 'Cloud' },
+  { value: 'other', label: 'Other' },
+];
+
+// --- Main Component ---
 const Popup = () => {
-  const [events, setEvents] = useState<RawEvent[]>([]);
-  const [domainStates, setDomainStates] = useState<Record<string, DomainState>>({});
-  const [activityStates, setActivityStates] = useState<Record<string, DomainActivityState>>({});
-  const [riskStates, setRiskStates] = useState<Record<string, RiskRecord>>({});
-  const [overrides, setOverrides] = useState<Record<string, UserOverride>>({});
-  
-  const [settings, setSettings] = useState<AppSettings>({ collectionEnabled: true, maxEvents: 1000 });
-  const [policy, setPolicy] = useState<RetentionPolicy>(DEFAULT_POLICY);
-  
-  const [activeTab, setActiveTab] = useState<'recent' | 'risk' | 'settings'>('recent');
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState(UI_CONSTANTS.TABS.OVERVIEW);
+  
+  // Data State
+  const [events, setEvents] = useState<RawEvent[]>([]);
+  const [activityStates, setActivityStates] = useState<Record<string, any>>({});
+  const [riskStates, setRiskStates] = useState<Record<string, any>>({});
+  const [overrides, setOverrides] = useState<Record<string, any>>({});
+  const [settings, setSettings] = useState<AppSettings>({ collectionEnabled: true, maxEvents: 1000, softThreshold: UI_CONSTANTS.SOFT_THRESHOLD_DEFAULT });
+  const [policy, setPolicy] = useState<any>({});
+  // Unused for list building but needed for cleaning
+  const [domainStates, setDomainStates] = useState<Record<string, any>>({});
 
-  // Load Data
-  const refreshData = async () => {
-    const data = await api.get([EVENTS_KEY, SETTINGS_KEY, DOMAIN_STATE_KEY, POLICY_KEY, ACTIVITY_STATE_KEY, RISK_STATE_KEY, USER_OVERRIDES_KEY]);
+  const loadData = async () => {
+    const keys = [EVENTS_KEY, SETTINGS_KEY, DOMAIN_STATE_KEY, POLICY_KEY, ACTIVITY_STATE_KEY, RISK_STATE_KEY, USER_OVERRIDES_KEY];
+    const data = await api.get(keys);
+    
     setEvents(data[EVENTS_KEY] || []);
+    setSettings({ ...settings, ...(data[SETTINGS_KEY] || {}) });
     setDomainStates(data[DOMAIN_STATE_KEY] || {});
     setActivityStates(data[ACTIVITY_STATE_KEY] || {});
     setRiskStates(data[RISK_STATE_KEY] || {});
     setOverrides(data[USER_OVERRIDES_KEY] || {});
-
-    if (data[SETTINGS_KEY]) {
-      setSettings(data[SETTINGS_KEY]);
-    }
-    setPolicy({ ...DEFAULT_POLICY, ...data[POLICY_KEY] });
+    setPolicy(data[POLICY_KEY] || {});
     setLoading(false);
   };
 
   useEffect(() => {
-    refreshData();
+    loadData();
     if (isExtensionEnv) {
-      const listener = (changes: any, areaName: string) => {
-        if (areaName === 'local') refreshData();
-      };
+      const listener = (_: any, area: string) => { if (area === 'local') loadData(); };
       chrome.storage.onChanged.addListener(listener);
       return () => chrome.storage.onChanged.removeListener(listener);
     } else {
-      const listener = () => refreshData();
+      const listener = () => loadData();
       window.addEventListener('storage', listener);
       return () => window.removeEventListener('storage', listener);
     }
   }, []);
 
-  // Actions
-  const handleTogglePause = async () => {
-    const newStatus = !settings.collectionEnabled;
-    await api.set({ [SETTINGS_KEY]: { ...settings, collectionEnabled: newStatus } });
-    refreshData();
+  // View Models
+  const hardList = useMemo(() => buildHardList(domainStates, activityStates, riskStates, overrides), [domainStates, activityStates, riskStates, overrides]);
+  const softList = useMemo(() => buildSoftList(domainStates, activityStates, riskStates, overrides, settings.softThreshold || UI_CONSTANTS.SOFT_THRESHOLD_DEFAULT), [domainStates, activityStates, riskStates, overrides, settings.softThreshold]);
+  const overviewStats = useMemo(() => buildOverviewStats(events, hardList, softList, policy), [events, hardList, softList, policy]);
+  const recentList = useMemo(() => events.slice(0, 30), [events]); // Limit recent
+
+  // Handlers
+  const togglePause = async () => {
+    await api.set({ [SETTINGS_KEY]: { ...settings, collectionEnabled: !settings.collectionEnabled } });
+    loadData();
   };
 
-  const handleClear = async () => {
-    if (confirm('Permanently delete all tracking history?')) {
-      const data = await api.get([POLICY_KEY]);
-      await api.set({ 
-        [EVENTS_KEY]: [], 
-        [DOMAIN_STATE_KEY]: {},
-        [ACTIVITY_STATE_KEY]: {},
-        [RISK_STATE_KEY]: {},
-        [POLICY_KEY]: { ...(data[POLICY_KEY] || DEFAULT_POLICY), last_cleanup_ts: 0 }
-      });
-      if (isExtensionEnv) chrome.action.setBadgeText({ text: '' });
-      refreshData();
-    }
-  };
-
-  const handleOverride = async (domain: string, partial: Partial<UserOverride>) => {
+  const updateOverride = async (domain: string, partial: any) => {
     if (isExtensionEnv) {
       await chrome.runtime.sendMessage({ type: 'SET_OVERRIDE', payload: { domain, overrides: partial } });
     } else {
-      // Mock for simulator
-      const current = overrides[domain] || { pinned: false, whitelisted: false, ignored: false, category: null, updated_ts: 0 };
-      const updated = { ...current, ...partial, updated_ts: Date.now() };
-      const newOverrides = { ...overrides, [domain]: updated };
-      await api.set({ [USER_OVERRIDES_KEY]: newOverrides });
-      refreshData();
+      // Mock for dev
+      const current = overrides[domain] || {};
+      const updated = { ...overrides, [domain]: { ...current, ...partial } };
+      await api.set({ [USER_OVERRIDES_KEY]: updated });
+      loadData();
     }
   };
 
-  const handleRunCleanup = async () => {
-    if (isExtensionEnv) {
-      const response: any = await chrome.runtime.sendMessage({ type: 'RUN_CLEANUP', force: true });
-      if (response?.success) refreshData();
-    }
+  const runCleanup = async () => {
+    if (isExtensionEnv) await chrome.runtime.sendMessage({ type: 'RUN_CLEANUP', force: true });
   };
 
-  // Derived Data
-  const recentEvents = useMemo(() => [...events].slice(0, 20), [events]);
-  
-  const riskList = useMemo(() => {
-    // Combine RiskState + Overrides + ActivityState for the list
-    return Object.keys(riskStates)
-      .map(domain => {
-        const risk = riskStates[domain];
-        const override = overrides[domain];
-        const activity = activityStates[domain];
-        
-        // Filter ignored domains (unless viewing settings/debug)
-        if (override?.ignored) return null;
-
-        return {
-          domain,
-          score: risk.score,
-          reasons: risk.reasons,
-          level: activity?.last_estimation_level,
-          pinned: override?.pinned || false,
-          whitelisted: override?.whitelisted || false,
-          category: override?.category || null
-        };
-      })
-      .filter(item => item !== null)
-      .sort((a, b) => (b?.score || 0) - (a?.score || 0)); // Sort by Score DESC
-  }, [riskStates, overrides, activityStates]);
+  const resetAll = async () => {
+    if (confirm("Reset everything?")) {
+        await api.set({ 
+            [EVENTS_KEY]: [], 
+            [DOMAIN_STATE_KEY]: {}, 
+            [ACTIVITY_STATE_KEY]: {}, 
+            [RISK_STATE_KEY]: {} 
+        });
+        loadData();
+    }
+  };
 
   if (loading) return <div className="h-full flex items-center justify-center text-slate-400">Loading...</div>;
 
   return (
-    <div className="flex flex-col h-full bg-white font-sans text-slate-900">
+    <div className="flex flex-col h-full bg-slate-50 font-sans text-slate-900 overflow-hidden">
       
-      {/* Header */}
-      <div className="bg-slate-900 text-white p-4 shrink-0 flex justify-between items-center">
-        <div className="flex items-center gap-2">
-          <Shield size={18} className="text-indigo-400" />
-          <h1 className="font-bold text-sm tracking-wide">PDTM <span className="text-slate-500 text-xs font-normal">v0.5</span></h1>
+      {/* Top Navigation */}
+      <div className="bg-white border-b border-slate-200 shrink-0">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-100">
+           <div className="flex items-center gap-2">
+             <Shield size={16} className="text-indigo-600" />
+             <span className="font-bold text-sm text-slate-800">PDTM</span>
+           </div>
+           <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${settings.collectionEnabled ? 'bg-indigo-50 text-indigo-600' : 'bg-amber-50 text-amber-600'}`}>
+             <div className={`w-1.5 h-1.5 rounded-full ${settings.collectionEnabled ? 'bg-indigo-500 animate-pulse' : 'bg-amber-500'}`} />
+             {settings.collectionEnabled ? 'ON' : 'PAUSED'}
+           </div>
         </div>
-        <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium border ${settings.collectionEnabled ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-300' : 'bg-amber-500/10 border-amber-500/50 text-amber-300'}`}>
-          <div className={`w-1.5 h-1.5 rounded-full ${settings.collectionEnabled ? 'bg-indigo-400 animate-pulse' : 'bg-amber-400'}`} />
-          {settings.collectionEnabled ? 'Active' : 'Paused'}
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex border-b border-slate-200">
-        <button 
-          onClick={() => setActiveTab('recent')}
-          className={`flex-1 py-3 text-xs font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'recent' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-white' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}
-        >
-          <Clock size={14} /> Recent
-        </button>
-        <button 
-          onClick={() => setActiveTab('risk')}
-          className={`flex-1 py-3 text-xs font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'risk' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-white' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}
-        >
-          <AlertTriangle size={14} /> Attention
-        </button>
-        <button 
-          onClick={() => setActiveTab('settings')}
-          className={`flex-1 py-3 text-xs font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'settings' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-white' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}
-        >
-          <SettingsIcon size={14} /> Settings
-        </button>
-      </div>
-
-      {/* Content Area */}
-      <div className="flex-1 overflow-y-auto bg-white p-0 scrollbar-thin">
         
-        {/* TAB: RECENT */}
-        {activeTab === 'recent' && (
-          events.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center">
-              <Activity size={32} className="mb-2 opacity-20" />
-              <p className="text-sm">No recent traces.</p>
+        <div className="flex justify-around">
+          {[
+            { id: UI_CONSTANTS.TABS.OVERVIEW, icon: LayoutDashboard, label: 'Home' },
+            { id: UI_CONSTANTS.TABS.RECENT, icon: Clock, label: 'Recent' },
+            { id: UI_CONSTANTS.TABS.HARD, icon: Briefcase, label: 'Managed', badge: hardList.length },
+            { id: UI_CONSTANTS.TABS.SOFT, icon: Inbox, label: 'Review', badge: softList.length },
+            { id: UI_CONSTANTS.TABS.SETTINGS, icon: SettingsIcon, label: 'Config' },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`relative flex-1 py-2 flex flex-col items-center gap-0.5 transition-colors
+                ${activeTab === tab.id ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}
+              `}
+            >
+              <div className="relative">
+                <tab.icon size={18} />
+                {tab.badge ? (
+                  <span className="absolute -top-1.5 -right-2 bg-rose-500 text-white text-[8px] font-bold px-1 rounded-full min-w-[12px] h-[12px] flex items-center justify-center">
+                    {tab.badge > 99 ? '99+' : tab.badge}
+                  </span>
+                ) : null}
+              </div>
+              <span className="text-[9px] font-medium">{tab.label}</span>
+              {activeTab === tab.id && <div className="absolute bottom-0 w-full h-0.5 bg-indigo-600" />}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 overflow-y-auto scrollbar-thin">
+        
+        {/* --- OVERVIEW --- */}
+        {activeTab === UI_CONSTANTS.TABS.OVERVIEW && (
+          <div className="p-4 space-y-4">
+            {/* Status Card */}
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Today's Activity</h2>
+               <div className="grid grid-cols-2 gap-4">
+                 <div className="bg-indigo-50 rounded-lg p-3 border border-indigo-100">
+                    <div className="text-2xl font-bold text-indigo-700">{overviewStats.todayCount}</div>
+                    <div className="text-[10px] text-indigo-400 font-medium">Events Captured</div>
+                 </div>
+                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                    <div className="text-2xl font-bold text-slate-700">{formatRelative(overviewStats.lastCleanup)}</div>
+                    <div className="text-[10px] text-slate-400 font-medium">Last Cleanup</div>
+                 </div>
+               </div>
             </div>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {recentEvents.map((e, i) => {
-                const actState = activityStates[e.domain];
-                const level = actState ? actState.last_estimation_level : "view";
-                return (
-                  <li key={e.ts + '_' + i} className="p-3 hover:bg-slate-50 flex items-center gap-3">
-                    <div className="bg-slate-100 p-1.5 rounded text-slate-500 relative">
-                      <Globe size={14} />
-                      {level !== "view" && (
-                         <div className="absolute -top-1 -right-1 bg-white rounded-full p-0.5 shadow-sm border border-slate-100">
-                            {getActivityIcon(level)}
-                         </div>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-slate-800 truncate">{e.domain}</div>
-                      <div className="text-xs text-slate-400 font-mono">{formatTime(e.ts)}</div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )
-        )}
 
-        {/* TAB: ATTENTION (RISK) */}
-        {activeTab === 'risk' && (
-          riskList.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center">
-              <Shield size={32} className="mb-2 opacity-20" />
-              <p className="text-sm">No significant activity analyzed yet.</p>
-            </div>
-          ) : (
-            <ul className="divide-y divide-slate-100 pb-20">
-              {riskList.map((item: any) => (
-                <li key={item.domain} className="p-3 hover:bg-slate-50 group">
-                  <div className="flex justify-between items-start mb-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                       {/* Score Badge */}
-                       <div className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getRiskColor(item.score)}`}>
-                         {item.score}
-                       </div>
-                       <div className="font-medium text-slate-800 text-sm truncate flex items-center gap-1">
-                         {item.pinned && <Pin size={10} className="text-indigo-500 fill-indigo-500" />}
-                         {item.domain}
-                       </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                       <button 
-                         onClick={() => handleOverride(item.domain, { pinned: !item.pinned })}
-                         className={`p-1.5 rounded hover:bg-slate-200 transition-colors ${item.pinned ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}
-                         title="Pin to prevent deletion"
-                       >
-                         <Pin size={14} />
-                       </button>
-                       <button 
-                         onClick={() => handleOverride(item.domain, { whitelisted: !item.whitelisted })}
-                         className={`p-1.5 rounded hover:bg-slate-200 transition-colors ${item.whitelisted ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400'}`}
-                         title="Mark as safe (Reduce score)"
-                       >
-                         <CheckCircle size={14} />
-                       </button>
-                       <button 
-                         onClick={() => handleOverride(item.domain, { ignored: true })}
-                         className="p-1.5 rounded hover:bg-slate-200 text-slate-400 hover:text-red-500 transition-colors"
-                         title="Ignore/Hide"
-                       >
-                         <EyeOff size={14} />
-                       </button>
-                    </div>
-                  </div>
-
-                  {/* Details */}
-                  <div className="pl-0.5 space-y-2">
-                    <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                      <div className="flex items-center gap-1">
-                        {getActivityIcon(item.level)}
-                        <span className="capitalize">{item.level}</span>
-                      </div>
-                      <span className="text-slate-300">|</span>
-                      {item.reasons.length > 0 ? (
-                        <span className="truncate max-w-[150px]">{item.reasons.map((r:string) => r.replace('level_', '').replace('cat_', '')).join(', ')}</span>
-                      ) : <span>Passive</span>}
-                    </div>
-                    
-                    {/* Category Dropdown */}
-                    <div className="flex items-center gap-2">
-                      <Tag size={10} className="text-slate-400" />
-                      <select 
-                        className="text-[10px] bg-slate-100 border-none rounded py-0.5 px-1 text-slate-600 focus:ring-1 focus:ring-indigo-500 cursor-pointer w-24"
-                        value={item.category || ''}
-                        onChange={(e) => handleOverride(item.domain, { category: e.target.value || null })}
-                      >
-                        <option value="">No Tag</option>
-                        {CATEGORY_OPTIONS.map(opt => (
-                          <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )
-        )}
-
-        {/* TAB: SETTINGS */}
-        {activeTab === 'settings' && (
-          <div className="p-4 space-y-6">
-            <div className="bg-amber-50 p-3 rounded-lg border border-amber-100 text-amber-800 text-xs">
-              <h3 className="font-bold flex items-center gap-2 mb-1"><AlertTriangle size={12}/> Attention Score</h3>
-              <p>Scores are estimated based on interaction depth (Transactions, Logins) and frequency. They indicate "Management Necessity", not necessarily maliciousness.</p>
+            {/* Quick Actions */}
+            <div className="grid grid-cols-2 gap-3">
+               <button 
+                 onClick={() => setActiveTab(UI_CONSTANTS.TABS.HARD)}
+                 className="bg-white p-3 rounded-xl shadow-sm border border-slate-200 flex items-center gap-3 hover:bg-slate-50 transition-colors"
+               >
+                 <div className="bg-rose-100 p-2 rounded-full text-rose-600"><Briefcase size={18}/></div>
+                 <div className="text-left">
+                   <div className="text-lg font-bold text-slate-800">{overviewStats.hardCount}</div>
+                   <div className="text-[10px] text-slate-500 font-medium">Managed</div>
+                 </div>
+               </button>
+               <button 
+                 onClick={() => setActiveTab(UI_CONSTANTS.TABS.SOFT)}
+                 className="bg-white p-3 rounded-xl shadow-sm border border-slate-200 flex items-center gap-3 hover:bg-slate-50 transition-colors"
+               >
+                 <div className="bg-amber-100 p-2 rounded-full text-amber-600"><Inbox size={18}/></div>
+                 <div className="text-left">
+                   <div className="text-lg font-bold text-slate-800">{overviewStats.softCount}</div>
+                   <div className="text-[10px] text-slate-500 font-medium">Review</div>
+                 </div>
+               </button>
             </div>
             
-            <button 
-                onClick={handleRunCleanup}
-                className="w-full py-2 bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold hover:bg-slate-200 flex items-center justify-center gap-2"
-               >
-                 <Eraser size={14} /> Run Policy Cleanup
-            </button>
+            <div className="text-center text-[10px] text-slate-400 mt-4">
+              Local-first Digital Footprint Manager v0.6
+            </div>
+          </div>
+        )}
+
+        {/* --- RECENT --- */}
+        {activeTab === UI_CONSTANTS.TABS.RECENT && (
+          <div>
+            {recentList.length === 0 ? (
+               <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                 <Clock size={32} className="opacity-20 mb-2"/>
+                 <p className="text-xs">No history yet.</p>
+               </div>
+            ) : (
+              <ul className="divide-y divide-slate-100 bg-white">
+                {recentList.map((e, i) => {
+                  const isManaged = isManagedDomain(e.domain, activityStates);
+                  return (
+                    <li key={`${e.ts}-${i}`} className="px-4 py-3 hover:bg-slate-50 flex items-center justify-between group">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="bg-slate-100 p-2 rounded-full text-slate-500">
+                          <Globe size={14} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-slate-800 truncate flex items-center gap-2">
+                            {e.domain}
+                            {isManaged && (
+                               <button 
+                                 onClick={(evt) => { evt.stopPropagation(); setActiveTab(UI_CONSTANTS.TABS.HARD); }}
+                                 className="px-1.5 py-0.5 bg-rose-50 text-rose-600 text-[9px] font-bold rounded uppercase tracking-wider border border-rose-100 hover:bg-rose-100"
+                               >
+                                 Managed
+                               </button>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-mono">{formatTime(e.ts)}</div>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* --- MANAGED (HARD) --- */}
+        {activeTab === UI_CONSTANTS.TABS.HARD && (
+          <div>
+            <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-rose-800 text-[10px] font-medium flex items-center gap-2">
+              <Briefcase size={12}/>
+              Domains with Account, UGC, or Payment activity.
+            </div>
+            {hardList.length === 0 ? (
+               <div className="flex flex-col items-center justify-center py-12 text-slate-400 px-6 text-center">
+                 <Briefcase size={32} className="opacity-20 mb-2"/>
+                 <p className="text-sm font-medium text-slate-600">No managed domains yet.</p>
+                 <p className="text-xs mt-1">Logins, content creation, and payments will appear here automatically.</p>
+               </div>
+            ) : (
+               <ul className="divide-y divide-slate-100 bg-white pb-20">
+                 {hardList.map(item => (
+                   <li key={item.domain} className="p-4 hover:bg-slate-50 transition-colors">
+                     <div className="flex items-start gap-3">
+                       {/* Icon Badge */}
+                       <div className={`shrink-0 p-2 rounded-lg border ${item.level === ActivityLevels.TRANSACTION ? 'bg-rose-50 border-rose-100' : 'bg-slate-50 border-slate-100'}`}>
+                          {getActivityIcon(item.level)}
+                       </div>
+                       
+                       <div className="flex-1 min-w-0">
+                         <div className="flex justify-between items-start">
+                            <div>
+                               <div className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                                 {item.domain}
+                                 {item.pinned && <Pin size={10} className="fill-indigo-500 text-indigo-500"/>}
+                               </div>
+                               <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
+                                 <span className="capitalize font-medium">{item.level}</span>
+                                 <span>•</span>
+                                 <span>{formatRelative(item.last_seen)}</span>
+                               </div>
+                            </div>
+                            <div className="flex gap-1">
+                               <button onClick={() => updateOverride(item.domain, { pinned: !item.pinned })} className={`p-1.5 rounded hover:bg-slate-200 ${item.pinned ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>
+                                 <Pin size={14} />
+                               </button>
+                               <button onClick={() => updateOverride(item.domain, { whitelisted: !item.whitelisted })} className={`p-1.5 rounded hover:bg-slate-200 ${item.whitelisted ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400'}`}>
+                                 <CheckCircle size={14} />
+                               </button>
+                            </div>
+                         </div>
+                         
+                         {/* Category & Tags */}
+                         <div className="mt-2 flex items-center gap-2">
+                            <div className="relative">
+                               <select 
+                                 className="appearance-none bg-slate-100 border-none rounded text-[10px] py-1 pl-2 pr-6 font-medium text-slate-600 focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                                 value={item.category || ''}
+                                 onChange={(e) => updateOverride(item.domain, { category: e.target.value })}
+                               >
+                                 <option value="">+ Tag</option>
+                                 {CATEGORY_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                               </select>
+                               <Tag size={10} className="absolute right-2 top-1.5 text-slate-400 pointer-events-none"/>
+                            </div>
+                            
+                            {/* Simple Score Badge for Hard List (Secondary) */}
+                            {item.score > 0 && (
+                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-mono">
+                                 Risk: {item.score}
+                               </span>
+                            )}
+                         </div>
+                       </div>
+                     </div>
+                   </li>
+                 ))}
+               </ul>
+            )}
+          </div>
+        )}
+
+        {/* --- REVIEW (SOFT) --- */}
+        {activeTab === UI_CONSTANTS.TABS.SOFT && (
+          <div>
+            <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-amber-800 text-[10px] font-medium flex items-center gap-2">
+               <Inbox size={12}/>
+               Passive visits with high frequency or attention score {'>'}= {settings.softThreshold || UI_CONSTANTS.SOFT_THRESHOLD_DEFAULT}.
+            </div>
+            {softList.length === 0 ? (
+               <div className="flex flex-col items-center justify-center py-12 text-slate-400 px-6 text-center">
+                 <Inbox size={32} className="opacity-20 mb-2"/>
+                 <p className="text-sm font-medium text-slate-600">Nothing to review.</p>
+                 <p className="text-xs mt-1">Items appear here when you visit them often.</p>
+               </div>
+            ) : (
+               <ul className="divide-y divide-slate-100 bg-white pb-20">
+                  {softList.map(item => (
+                    <li key={item.domain} className="p-4 hover:bg-slate-50 transition-colors">
+                      <div className="flex items-start gap-3">
+                        {/* Score Circle */}
+                        <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold border 
+                           ${item.score >= 50 ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-amber-50 text-amber-600 border-amber-100'}`}>
+                           {item.score}
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                           <div className="flex justify-between items-start">
+                              <div>
+                                 <div className="font-bold text-slate-800 text-sm truncate">{item.domain}</div>
+                                 <div className="text-[10px] text-slate-400 mt-0.5">{formatRelative(item.last_seen)}</div>
+                              </div>
+                              <div className="flex gap-1">
+                                 <button onClick={() => updateOverride(item.domain, { ignored: true })} className="p-1.5 rounded hover:bg-slate-200 text-slate-400 hover:text-red-500" title="Ignore">
+                                   <EyeOff size={14}/>
+                                 </button>
+                              </div>
+                           </div>
+
+                           {/* Reasons */}
+                           <div className="mt-2 flex flex-wrap gap-1">
+                              {item.reasons.slice(0, 3).map((r: string) => (
+                                <span key={r} className="text-[9px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200">
+                                  {r.replace('level_', '').replace('cat_', '').replace(/_/g, ' ')}
+                                </span>
+                              ))}
+                           </div>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+               </ul>
+            )}
+          </div>
+        )}
+
+        {/* --- SETTINGS --- */}
+        {activeTab === UI_CONSTANTS.TABS.SETTINGS && (
+          <div className="p-4 space-y-6">
+            
+            <div className="space-y-4">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Collection</h3>
+              <button 
+                onClick={togglePause}
+                className={`w-full py-3 rounded-xl border flex items-center justify-center gap-2 font-bold text-sm transition-all
+                  ${settings.collectionEnabled ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50' : 'bg-indigo-50 border-indigo-200 text-indigo-700'}
+                `}
+              >
+                {settings.collectionEnabled ? <><Pause size={16}/> Pause Collection</> : <><Play size={16}/> Resume Collection</>}
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Review Threshold</h3>
+              <div className="flex items-center gap-2 bg-white border border-slate-200 p-2 rounded-lg">
+                 <AlertTriangle size={16} className="text-amber-500"/>
+                 <input 
+                   type="number" 
+                   value={settings.softThreshold} 
+                   onChange={(e) => {
+                     const val = parseInt(e.target.value) || 0;
+                     api.set({ [SETTINGS_KEY]: { ...settings, softThreshold: val } });
+                     // Optimistic update
+                     setSettings({ ...settings, softThreshold: val });
+                   }}
+                   className="flex-1 text-sm outline-none"
+                 />
+                 <span className="text-xs text-slate-400">min score</span>
+              </div>
+              <p className="text-[10px] text-slate-400">
+                Domains with only "view" activity will appear in the Review tab if their score exceeds this value.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Danger Zone</h3>
+              <button onClick={runCleanup} className="w-full py-2 bg-slate-100 text-slate-600 border border-slate-200 rounded-lg text-xs font-bold hover:bg-slate-200 flex items-center justify-center gap-2">
+                 <Eraser size={14} /> Run Retention Policy Now
+              </button>
+              <button onClick={resetAll} className="w-full py-2 bg-white text-rose-600 border border-rose-200 rounded-lg text-xs font-bold hover:bg-rose-50 flex items-center justify-center gap-2">
+                 <Trash2 size={14} /> Factory Reset
+              </button>
+            </div>
           </div>
         )}
 
       </div>
 
-      {/* Footer */}
-      <div className="p-3 bg-slate-50 border-t border-slate-200 flex gap-2 shrink-0">
-        <button 
-          onClick={handleTogglePause}
-          className={`flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 border transition-all active:scale-95
-            ${settings.collectionEnabled 
-              ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100' 
-              : 'bg-indigo-50 border-indigo-200 text-indigo-700'}`}
-        >
-          {settings.collectionEnabled ? <><Pause size={14} /> Pause</> : <><Play size={14} /> Resume</>}
-        </button>
-        <button 
-          onClick={handleClear}
-          className="flex-1 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-medium hover:bg-red-50 hover:text-red-600 hover:border-red-200 flex items-center justify-center gap-1.5 transition-colors active:scale-95"
-        >
-          <Trash2 size={14} /> Reset
-        </button>
-      </div>
+      {!isExtensionEnv && (
+         <div className="absolute top-0 right-0 bg-red-500 text-white text-[9px] px-1 py-0.5 font-bold">PREVIEW MODE</div>
+      )}
     </div>
   );
 };
 
-// --- SIMULATOR TOOL ---
+// --- SIMULATOR TOOL (Kept for Dev) ---
 const DevSimulator = () => {
   const [simUrl, setSimUrl] = useState('https://www.google.com/account/login');
   
   const simulateVisit = async () => {
     try {
-      const url = new URL(simUrl);
-      if (!['http:', 'https:'].includes(url.protocol)) return alert('Invalid protocol');
       await chrome.webNavigation.onCompleted.dispatch({ frameId: 0, url: simUrl, timeStamp: Date.now() });
-    } catch (e) {
-      alert('Simulation requires running via extension context or improved mock.');
-    }
+    } catch (e) { console.warn("Sim only works in extension context or with better mocks"); }
   };
 
   return (
     <div className="absolute -right-[340px] top-0 w-[320px] bg-slate-800 p-4 rounded-lg text-white shadow-xl border border-slate-600">
       <div className="flex items-center gap-2 mb-3 text-emerald-400">
-        <Construction size={16} />
+        <LayoutDashboard size={16} />
         <h3 className="font-bold text-sm">Dev Simulator</h3>
       </div>
-      <p className="text-xs text-slate-300 mb-3">Chapter 5: Check 'Attention' tab after visiting.</p>
       <input 
         value={simUrl} 
         onChange={e => setSimUrl(e.target.value)}
@@ -532,7 +562,7 @@ const DevSimulator = () => {
 const App = () => {
   return (
     <div className="relative flex justify-center items-center h-full bg-slate-200">
-      <div className="w-[360px] h-[500px] shadow-2xl relative">
+      <div className="w-[360px] h-[500px] shadow-2xl relative bg-white">
         <Popup />
       </div>
       {!isExtensionEnv && <DevSimulator />}
