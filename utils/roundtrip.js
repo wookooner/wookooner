@@ -22,10 +22,14 @@ export function isRoundtrip({ rpCandidate, idpCandidate, events, ttlMs = 30000 }
   const sortedEvents = [...events].sort((a, b) => a.ts - b.ts);
 
   // 1. Find the "Forward" leg: Navigation TO IdP
-  // Heuristic: We look for the first appearance of IdP.
-  // Ideally, we'd check if the *previous* event was RP, but 
-  // keeping it simple for "Observation" logic: we observed IdP being loaded.
-  const forwardIndex = sortedEvents.findIndex(e => e.domain === idpCandidate);
+  // Refined Rule: The event immediately preceding IdP must be RP.
+  // This prevents false positives where we just happen to see IdP later in a session.
+  const forwardIndex = sortedEvents.findIndex((e, idx) => 
+    e.domain === idpCandidate && 
+    idx > 0 && 
+    sortedEvents[idx - 1].domain === rpCandidate
+  );
+
   if (forwardIndex === -1) return false;
   
   const forwardEvent = sortedEvents[forwardIndex];

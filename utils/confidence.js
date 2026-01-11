@@ -67,6 +67,7 @@ export function finalizeConfidence(state) {
   // If we lack any STRONG evidence, we cannot exceed the safety cap.
   const strongTypes = [
     EVIDENCE_TYPES.REDIRECT_URI_MATCH,
+    EVIDENCE_TYPES.STRONG_PATH, // Added in Chapter 0 Refinement
     EVIDENCE_TYPES.OPENER_LINK,
     EVIDENCE_TYPES.TEMPORAL_CHAIN
   ];

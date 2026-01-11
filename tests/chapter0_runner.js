@@ -67,28 +67,46 @@ const validEvents = [
   { ts: now, domain: idp, tabId: 1 },
   { ts: now + 5000, domain: rp, tabId: 1 }
 ];
-assert("Valid roundtrip accepted", isRoundtrip({ rpCandidate: rp, idpCandidate: idp, events: validEvents }));
+// Note: This simple case fails the STRICT RP->IdP check because there is no RP preceding IdP.
+// We must simulate the full chain [RP, IdP, RP] for the new strict logic.
+const strictChainEvents = [
+  { ts: now, domain: rp, tabId: 1 },
+  { ts: now + 100, domain: idp, tabId: 1 },
+  { ts: now + 5000, domain: rp, tabId: 1 }
+];
+assert("Valid RP->IdP->RP roundtrip accepted", isRoundtrip({ rpCandidate: rp, idpCandidate: idp, events: strictChainEvents }));
 
 // Case B: Too Slow (TTL)
 const slowEvents = [
-  { ts: now, domain: idp, tabId: 1 },
+  { ts: now, domain: rp, tabId: 1 },
+  { ts: now + 100, domain: idp, tabId: 1 },
   { ts: now + 35000, domain: rp, tabId: 1 } // > 30s
 ];
 assert("Exceeded TTL rejected", !isRoundtrip({ rpCandidate: rp, idpCandidate: idp, events: slowEvents }));
 
 // Case C: Wrong Context (Different Tabs, No Link)
 const diffTabEvents = [
-  { ts: now, domain: idp, tabId: 1 },
+  { ts: now, domain: rp, tabId: 1 },
+  { ts: now + 100, domain: idp, tabId: 1 },
   { ts: now + 1000, domain: rp, tabId: 2 }
 ];
 assert("Different tabs rejected", !isRoundtrip({ rpCandidate: rp, idpCandidate: idp, events: diffTabEvents }));
 
 // Case D: Valid Context (Linked Opener)
 const linkedEvents = [
-  { ts: now, domain: idp, tabId: 1 },
+  { ts: now, domain: rp, tabId: 1 },
+  { ts: now + 100, domain: idp, tabId: 1 },
   { ts: now + 1000, domain: rp, tabId: 2, openerTabId: 1 }
 ];
 assert("Opener linked tabs accepted", isRoundtrip({ rpCandidate: rp, idpCandidate: idp, events: linkedEvents }));
 
+// Case E: Strict Precedence Fail
+// Events: [Other, IdP, RP]. IdP is present, RP is present later, but RP did not precede IdP.
+const unrelatedEvents = [
+  { ts: now, domain: "google.com", tabId: 1 }, 
+  { ts: now + 100, domain: idp, tabId: 1 },
+  { ts: now + 5000, domain: rp, tabId: 1 }
+];
+assert("Strict RP->IdP precedence enforced (Unrelated start)", !isRoundtrip({ rpCandidate: rp, idpCandidate: idp, events: unrelatedEvents }));
 
 console.log(`\nResults: ${passed} Passed, ${failed} Failed.`);
