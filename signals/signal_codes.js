@@ -14,6 +14,7 @@ export const SIGNAL_CODES = Object.freeze({
   DOM_PASSWORD: "dom_password",     // <input type="password">
   DOM_EDITOR: "dom_editor",         // contenteditable, textarea with specific attributes
   DOM_PAYMENT: "dom_payment",       // CC input patterns, payment buttons
+  DOM_SAML: "dom_saml",             // Chapter 5: SAML Form detected
   
   // Default
   PASSIVE: "passive_view"

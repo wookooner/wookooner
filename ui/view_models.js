@@ -80,17 +80,11 @@ export function buildSoftList(domainStates, activityStates, riskStates, override
 
       // Logic: Must be surfaced (Review/Suggested/Pinned) but NOT Managed (Suggested/Pinned)
       // AND not ignored.
-      // Essentially: state === NEEDS_REVIEW
-      
-      // For MVP transition: If state exists, use it. If not, fallback to legacy view check.
+      // Strictly use Enum comparison
       if (state) {
         return !isIgnored && state === MANAGEMENT_STATE.NEEDS_REVIEW;
       }
-      
-      // Legacy Fallback (keeping for robustness during data migration)
-      return !isIgnored && 
-             activity?.last_estimation_level === ActivityLevels.VIEW &&
-             (riskStates[domain]?.score || 0) >= threshold;
+      return false; // Deprecated legacy fallback removed for cleaner state logic
     })
     .map(domain => {
       const activity = activityStates[domain];

@@ -7,10 +7,11 @@ import { ACTIVITY_STATE_KEY } from './activity_state.js';
 import { RISK_STATE_KEY } from './risk_state.js';
 import { USER_OVERRIDES_KEY } from './user_overrides.js';
 import { POLICY_KEY, DEFAULT_POLICY } from './retention_policy.js';
+import { SETTINGS_KEY, DEFAULT_SETTINGS } from './settings.js';
 
 export const KEYS = Object.freeze({
   EVENTS: 'pdtm_events_v1',
-  SETTINGS: 'pdtm_settings_v1',
+  SETTINGS: SETTINGS_KEY,
   DOMAIN_STATE: DOMAIN_STATE_KEY,
   ACTIVITY_STATE: ACTIVITY_STATE_KEY,
   RISK_STATE: RISK_STATE_KEY,
@@ -19,11 +20,7 @@ export const KEYS = Object.freeze({
 });
 
 export const DEFAULTS = Object.freeze({
-  // Service worker defaults (UI specific defaults like softThreshold are handled in UI state)
-  SETTINGS: { 
-    collectionEnabled: true, 
-    maxEvents: 1000 
-  },
+  SETTINGS: DEFAULT_SETTINGS,
   // Ensure we start with a clean slate for retention policy
   POLICY: { 
     ...DEFAULT_POLICY, 

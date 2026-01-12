@@ -10,7 +10,8 @@ const FLAG_DESCRIPTIONS = {
   [EVIDENCE_TYPES.KNOWN_IDP]: "Known Identity Provider",
   [EVIDENCE_TYPES.OAUTH_PARAMS]: "OAuth protocol parameters detected",
   [EVIDENCE_TYPES.OPENER_LINK]: "Opened by another tab (popup flow)",
-  [EVIDENCE_TYPES.TEMPORAL_CHAIN]: "Roundtrip authentication flow detected"
+  [EVIDENCE_TYPES.TEMPORAL_CHAIN]: "Roundtrip authentication flow detected",
+  [EVIDENCE_TYPES.SAML_FORM]: "SAML 2.0 Single Sign-On form detected" // Chapter 5
 };
 
 /**
@@ -29,7 +30,9 @@ export function buildExplanation({ evidenceFlags, rp_domain, idp_domain }) {
   // Priority: structural -> behavioral -> static
   let primaryReason = "";
 
-  if (evidenceFlags.includes(EVIDENCE_TYPES.REDIRECT_URI_MATCH)) {
+  if (evidenceFlags.includes(EVIDENCE_TYPES.SAML_FORM)) {
+    primaryReason = "SAML SSO form detected (Structure only)";
+  } else if (evidenceFlags.includes(EVIDENCE_TYPES.REDIRECT_URI_MATCH)) {
     primaryReason = rp_domain 
       ? `Login flow for ${rp_domain}` 
       : "Standard OAuth redirect detected";

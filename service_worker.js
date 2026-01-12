@@ -3,7 +3,7 @@
 // Logic: Navigation -> Filter -> Dedupe -> Store Event -> Update Domain State
 // Updated for Chapter 3: Triggers Retention Check & RP/IdP Inference
 // Updated for Chapter 4: Activity Classification (Navigation + DOM Signals)
-// Updated for Chapter 5: Risk Calculation & User Overrides
+// Updated for Chapter 5: Risk Calculation, User Overrides & SAML Support
 // Updated for Chapter 6: Centralized Defaults & RESET_ALL Handler
 // Updated for Chapter 1: Session Graph Infrastructure
 
@@ -13,8 +13,10 @@ import { classify } from './jobs/classifier_job.js';
 import { updateActivityState } from './storage/activity_state.js';
 import { updateRiskForDomain } from './jobs/risk_job.js'; 
 import { updateUserOverride } from './storage/user_overrides.js'; 
+import { getSettings, PRIVACY_MODES } from './storage/settings.js'; // Chapter 5
 import { KEYS, DEFAULTS } from './storage/defaults.js';
 import { getDomain } from './utils/domain.js';
+import { SIGNAL_CODES } from './signals/signal_codes.js';
 
 // Chapter 1 Imports
 import { recordTabOpener, recordTemporalEvent } from './storage/session_store.js';
@@ -203,15 +205,10 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   // A. RESET_ALL (Chapter 6: Factory Reset)
-  // Strictly serialized via updateQueue to prevent race conditions during reset
   if (message.type === 'RESET_ALL') {
     updateQueue = updateQueue.then(async () => {
-      // 1. Wipe Storage
       await chrome.storage.local.clear();
-      // Chapter 1: Also wipe session
       await chrome.storage.session.clear();
-
-      // 2. Restore Defaults (SSOT from defaults.js)
       await chrome.storage.local.set({
         [KEYS.SETTINGS]: DEFAULTS.SETTINGS,
         [KEYS.POLICY]: DEFAULTS.POLICY,
@@ -221,10 +218,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         [KEYS.RISK_STATE]: DEFAULTS.RISK_STATE,
         [KEYS.USER_OVERRIDES]: DEFAULTS.USER_OVERRIDES
       });
-
-      // 3. Clear Badge
       await chrome.action.setBadgeText({ text: '' });
-
       return true;
     }).then(() => {
       sendResponse({ success: true });
@@ -232,7 +226,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.error("Reset Error:", err);
       sendResponse({ success: false, error: err.message });
     });
-    return true; // Keep channel open
+    return true; 
   }
 
   // B. Manual Cleanup (UI)
@@ -250,54 +244,70 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // C. Activity Signal (Content Script)
+  // Handles generic DOM signals (password, editor)
   if (message.type === 'ACTIVITY_SIGNAL') {
-    // Only accept from trusted content scripts (sender.tab must exist)
     if (!sender.tab || !sender.tab.url) return;
-
     const domain = getDomain(sender.tab.url);
     if (!domain) return;
 
     updateQueue = updateQueue.then(async () => {
-      // Check Collection Enabled Guard
-      const data = await chrome.storage.local.get(KEYS.SETTINGS);
-      const settings = data[KEYS.SETTINGS] || DEFAULTS.SETTINGS;
+      const settings = await getSettings(chrome.storage.local);
       if (!settings.collectionEnabled) return;
 
-      const { payload } = message; // { url, signals, timestamp }
-      
-      // Re-classify using the DOM signals, pass tabId from sender
+      const { payload } = message; 
       const estimation = await classify(payload.url, payload.signals, { tabId: sender.tab.id });
-      
-      // Update Activity State
       await updateActivityState(domain, estimation, payload.timestamp, chrome.storage.local);
-
-      // Chapter 5: Re-calculate Risk based on new signals
       await updateRiskForDomain(domain, chrome.storage.local);
-
       console.log(`[PDTM] DOM Signal processed for ${domain}:`, estimation.level);
-
-    }).catch(err => {
-      console.error("Signal Processing Error:", err);
-    });
+    }).catch(err => console.error("Signal Processing Error:", err));
   }
 
-  // D. Chapter 5: User Override (UI)
-  if (message.type === 'SET_OVERRIDE') {
-    const { domain, overrides } = message.payload; // overrides = { pinned: true, etc. }
-    
-    updateQueue = updateQueue.then(async () => {
-       // 1. Update the override store
-       await updateUserOverride(domain, overrides, chrome.storage.local);
-       
-       // 2. Re-calculate Risk for this domain immediately
-       await updateRiskForDomain(domain, chrome.storage.local);
+  // D. Chapter 5: SAML Form Signal (Content Script)
+  if (message.type === 'SAML_FORM_SIGNAL') {
+    if (!sender.tab || !sender.tab.url) return;
+    const domain = getDomain(sender.tab.url);
+    if (!domain) return;
 
+    updateQueue = updateQueue.then(async () => {
+      const settings = await getSettings(chrome.storage.local);
+      if (!settings.collectionEnabled) return;
+
+      const { payload } = message; // { hasSamlForm, actionDomain, actionPathHash... }
+      
+      // Privacy Mode Filtering
+      // If Strict, strip metadata before processing (though logic mostly relies on boolean presence)
+      if (settings.privacyMode === PRIVACY_MODES.STRICT) {
+         delete payload.actionDomain;
+         delete payload.actionPathHash;
+      }
+
+      // Convert to classification signal
+      const explicitSignals = [SIGNAL_CODES.DOM_SAML];
+      
+      const estimation = await classify(sender.tab.url, explicitSignals, { 
+        tabId: sender.tab.id,
+        samlContext: payload // Pass metadata to classifier if needed for future logic
+      });
+
+      await updateActivityState(domain, estimation, message.timestamp || Date.now(), chrome.storage.local);
+      await updateRiskForDomain(domain, chrome.storage.local);
+      console.log(`[PDTM] SAML Signal processed for ${domain}`);
+
+    }).catch(err => console.error("SAML Processing Error:", err));
+  }
+
+  // E. Chapter 5: User Override (UI)
+  if (message.type === 'SET_OVERRIDE') {
+    const { domain, overrides } = message.payload; 
+    updateQueue = updateQueue.then(async () => {
+       await updateUserOverride(domain, overrides, chrome.storage.local);
+       await updateRiskForDomain(domain, chrome.storage.local);
        return true;
     }).then(() => {
        sendResponse({ success: true });
     }).catch(err => {
        sendResponse({ success: false, error: err.message });
     });
-    return true; // Keep channel open
+    return true; 
   }
 });

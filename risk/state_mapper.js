@@ -26,9 +26,14 @@ export function mapToManagementState({ level, score, confidence, rp_domain, evid
     return MANAGEMENT_STATE.PINNED;
   }
 
+  // Chapter 5 Check: SAML Guard
+  // SAML detection is Beta/Structural only. It should NEVER auto-suggest.
+  const isSamlOnly = evidenceFlags.includes(EVIDENCE_TYPES.SAML_FORM) && 
+                     !evidenceFlags.includes(EVIDENCE_TYPES.REDIRECT_URI_MATCH);
+
   // 2. SUGGESTED Rules (High Confidence & Impact)
   // Goal: Only "Definite" items.
-  if (confidence >= 0.8) {
+  if (confidence >= 0.8 && !isSamlOnly) {
     // A. Transactions are inherently high value
     if (level === ActivityLevels.TRANSACTION) {
       return MANAGEMENT_STATE.SUGGESTED;

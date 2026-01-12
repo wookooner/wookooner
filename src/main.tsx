@@ -23,12 +23,14 @@ import {
   ListFilter,
   Inbox,
   Briefcase,
-  Undo2
+  Undo2,
+  Lock
 } from 'lucide-react';
 import { ActivityLevels } from '../signals/activity_levels.js';
 import { UI_CONSTANTS } from '../ui/constants.js';
 import { buildHardList, buildSoftList, buildOverviewStats, isManagedDomain } from '../ui/view_models.js';
 import { KEYS, DEFAULTS } from '../storage/defaults.js';
+import { PRIVACY_MODES } from '../storage/settings.js';
 
 // Declare chrome to avoid TS errors
 declare const chrome: any;
@@ -43,7 +45,8 @@ interface RawEvent {
 interface AppSettings {
   collectionEnabled: boolean;
   maxEvents: number;
-  softThreshold?: number; // Added for Chapter 6
+  softThreshold?: number;
+  privacyMode: string; // Chapter 5
 }
 
 // --- API ---
@@ -120,19 +123,22 @@ const Popup = () => {
   const [activityStates, setActivityStates] = useState<Record<string, any>>({});
   const [riskStates, setRiskStates] = useState<Record<string, any>>({});
   const [overrides, setOverrides] = useState<Record<string, any>>({});
-  const [settings, setSettings] = useState<AppSettings>({ collectionEnabled: true, maxEvents: 1000, softThreshold: UI_CONSTANTS.SOFT_THRESHOLD_DEFAULT });
+  const [settings, setSettings] = useState<AppSettings>({ 
+    collectionEnabled: true, 
+    maxEvents: 1000, 
+    softThreshold: UI_CONSTANTS.SOFT_THRESHOLD_DEFAULT,
+    privacyMode: PRIVACY_MODES.STRICT
+  });
   const [policy, setPolicy] = useState<any>({});
-  // Reserved for future use (stats aggregation)
   const [domainStates, setDomainStates] = useState<Record<string, any>>({});
 
   const loadData = async () => {
-    // Dynamically fetch all keys defined in the SSOT
     const keysToFetch = Object.values(KEYS);
     const data = await api.get(keysToFetch);
     
     setEvents(data[KEYS.EVENTS] || []);
-    // P0-2: Functional update to prevent stale closures, safely merging with defaults/previous
-    setSettings(prev => ({ ...prev, ...(data[KEYS.SETTINGS] || {}) }));
+    // Ensure we merge with defaults to catch new keys like privacyMode
+    setSettings(prev => ({ ...DEFAULTS.SETTINGS, ...prev, ...(data[KEYS.SETTINGS] || {}) }));
     
     setDomainStates(data[KEYS.DOMAIN_STATE] || {});
     setActivityStates(data[KEYS.ACTIVITY_STATE] || {});
@@ -160,28 +166,32 @@ const Popup = () => {
   const softList = useMemo(() => buildSoftList(domainStates, activityStates, riskStates, overrides, settings.softThreshold || UI_CONSTANTS.SOFT_THRESHOLD_DEFAULT), [domainStates, activityStates, riskStates, overrides, settings.softThreshold]);
   const overviewStats = useMemo(() => buildOverviewStats(events, hardList, softList, policy), [events, hardList, softList, policy]);
   
-  // P1-1: Sort by latest first (descending timestamp) before slicing
   const recentList = useMemo(() => {
     return [...events].sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 30);
   }, [events]);
 
   // Handlers
-  
-  // P0-2: Stale closure safe update
   const togglePause = async () => {
     setSettings(prev => {
       const newSettings = { ...prev, collectionEnabled: !prev.collectionEnabled };
-      // Fire and forget storage update, relying on listener or subsequent loads for sync
       api.set({ [KEYS.SETTINGS]: newSettings });
       return newSettings;
     });
+  };
+  
+  const togglePrivacyMode = async () => {
+     setSettings(prev => {
+       const newMode = prev.privacyMode === PRIVACY_MODES.STRICT ? PRIVACY_MODES.IMPROVED : PRIVACY_MODES.STRICT;
+       const newSettings = { ...prev, privacyMode: newMode };
+       api.set({ [KEYS.SETTINGS]: newSettings });
+       return newSettings;
+     });
   };
 
   const updateOverride = async (domain: string, partial: any) => {
     if (isExtensionEnv) {
       await chrome.runtime.sendMessage({ type: 'SET_OVERRIDE', payload: { domain, overrides: partial } });
     } else {
-      // Mock for dev
       const current = overrides[domain] || {};
       const updated = { ...overrides, [domain]: { ...current, ...partial } };
       await api.set({ [KEYS.USER_OVERRIDES]: updated });
@@ -193,12 +203,10 @@ const Popup = () => {
     if (isExtensionEnv) await chrome.runtime.sendMessage({ type: 'RUN_CLEANUP', force: true });
   };
 
-  // P0-1: Full Factory Reset (Clears ALL state via Service Worker SSOT)
   const resetAll = async () => {
     if (confirm("Factory Reset: Clear all history, settings, and learned rules? This cannot be undone.")) {
         if (isExtensionEnv) {
             try {
-                // Request Reset from Service Worker (SSOT)
                 const res = await chrome.runtime.sendMessage({ type: 'RESET_ALL' });
                 if (res && res.success) {
                     await loadData();
@@ -211,7 +219,6 @@ const Popup = () => {
                 alert("Could not communicate with background service.");
             }
         } else {
-            // Preview Mode: Manual Reset using SSOT DEFAULTS
             localStorage.clear();
             const defaults = {
                 [KEYS.EVENTS]: DEFAULTS.EVENTS, 
@@ -219,11 +226,8 @@ const Popup = () => {
                 [KEYS.ACTIVITY_STATE]: DEFAULTS.ACTIVITY_STATE, 
                 [KEYS.RISK_STATE]: DEFAULTS.RISK_STATE,
                 [KEYS.USER_OVERRIDES]: DEFAULTS.USER_OVERRIDES,
-                [KEYS.POLICY]: DEFAULTS.POLICY, // Already has last_cleanup_ts: 0
-                [KEYS.SETTINGS]: { 
-                  ...DEFAULTS.SETTINGS, 
-                  softThreshold: UI_CONSTANTS.SOFT_THRESHOLD_DEFAULT 
-                }
+                [KEYS.POLICY]: DEFAULTS.POLICY,
+                [KEYS.SETTINGS]: DEFAULTS.SETTINGS
             };
             await api.set(defaults);
             await loadData();
@@ -232,7 +236,6 @@ const Popup = () => {
     }
   };
 
-  // P1-2: Ignored List Helper
   const ignoredList = useMemo(() => {
     return Object.keys(overrides)
       .filter(d => overrides[d].ignored)
@@ -419,7 +422,6 @@ const Popup = () => {
                                <button onClick={() => updateOverride(item.domain, { pinned: !item.pinned })} className={`p-1.5 rounded hover:bg-slate-200 ${item.pinned ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>
                                  <Pin size={14} />
                                </button>
-                               {/* P1-3: Whitelist Tooltip */}
                                <button 
                                   onClick={() => updateOverride(item.domain, { whitelisted: !item.whitelisted })} 
                                   className={`p-1.5 rounded hover:bg-slate-200 ${item.whitelisted ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400'}`}
@@ -529,12 +531,39 @@ const Popup = () => {
                 {settings.collectionEnabled ? <><Pause size={16}/> Pause Collection</> : <><Play size={16}/> Resume Collection</>}
               </button>
             </div>
+            
+            {/* Chapter 5: Privacy Mode Toggle */}
+            <div className="space-y-2">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Data Privacy</h3>
+              <div className="bg-white border border-slate-200 rounded-xl p-3">
+                 <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                       <Lock size={14} className="text-slate-500"/> Privacy Mode
+                    </span>
+                    <button 
+                      onClick={togglePrivacyMode}
+                      className={`px-3 py-1 rounded-full text-[10px] font-bold border transition-colors ${
+                         settings.privacyMode === PRIVACY_MODES.STRICT 
+                           ? 'bg-emerald-50 text-emerald-600 border-emerald-100' 
+                           : 'bg-indigo-50 text-indigo-600 border-indigo-100'
+                      }`}
+                    >
+                      {settings.privacyMode === PRIVACY_MODES.STRICT ? 'STRICT (Default)' : 'IMPROVED'}
+                    </button>
+                 </div>
+                 <p className="text-[10px] text-slate-500 leading-tight">
+                    {settings.privacyMode === PRIVACY_MODES.STRICT 
+                      ? "Strict Mode: We only check if login forms exist. No URL paths or metadata are collected." 
+                      : "Improved Mode: We collect structural hashes of login paths to better identify providers. No values are ever stored."
+                    }
+                 </p>
+              </div>
+            </div>
 
             <div className="space-y-2">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Review Threshold</h3>
               <div className="flex items-center gap-2 bg-white border border-slate-200 p-2 rounded-lg">
                  <AlertTriangle size={16} className="text-amber-500"/>
-                 {/* P0-2: Stale closure safe update */}
                  <input 
                    type="number" 
                    value={settings.softThreshold} 
@@ -555,7 +584,6 @@ const Popup = () => {
               </p>
             </div>
             
-            {/* P1-2: Hidden Items Management */}
             {ignoredList.length > 0 && (
               <div className="space-y-2">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Hidden Items ({ignoredList.length})</h3>

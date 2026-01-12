@@ -3,6 +3,7 @@
 // Updated for Chapter 2: OAuth/OIDC Detection & Privacy Guards
 // Updated for Chapter 3: RP/IdP Inference & Confidence Contract
 // Updated for Chapter 4: Risk Model & Management State
+// Updated for Chapter 5: SAML Beta Support
 
 import { extractUrlSignals, evaluateSignals } from '../signals/heuristics.js';
 import { SIGNAL_CODES } from '../signals/signal_codes.js';
@@ -77,7 +78,7 @@ function detectOAuth(url) {
 /**
  * Runs classification logic for a given URL and optional explicit signals.
  * @param {string} url 
- * @param {string[]} [explicitSignals] - Signals from content script or other sources
+ * @param {string[]} [explicitSignals] - Signals from content script (DOM_SAML, etc.)
  * @param {Object} [context] - Chapter 3 Context (tabId, visitCount, etc.)
  * @returns {Promise<Object>} ActivityEstimation
  */
@@ -90,6 +91,9 @@ export async function classify(url, explicitSignals = [], context = {}) {
     console.warn(`[PDTM Classifier] Dropped unknown signal: ${signal}`);
     return false;
   });
+
+  // Check for SAML Signal
+  const hasSamlSignal = validatedSignals.includes(SIGNAL_CODES.DOM_SAML);
 
   // 1. Gather Basic Heuristic Signals
   const urlSignals = extractUrlSignals(url);
@@ -105,14 +109,24 @@ export async function classify(url, explicitSignals = [], context = {}) {
   let rpCandidate = null;
   let idpCandidate = inferIdpDomain(url);
   
-  if (oauthResult.isOAuth) {
+  // Trigger Logic: OAuth OR SAML
+  if (oauthResult.isOAuth || hasSamlSignal) {
     // --- Chapter 3: RP/IdP Inference & Confidence ---
     const confState = createConfidenceState();
     
-    // 3.1 Add Chapter 2 Evidence (Static indicators)
-    oauthResult.evidence.forEach(evType => {
-      addEvidenceOnce(confState, evType, EVIDENCE_WEIGHTS[evType]);
-    });
+    // 3.1 Add Evidence
+    if (oauthResult.isOAuth) {
+      oauthResult.evidence.forEach(evType => {
+        addEvidenceOnce(confState, evType, EVIDENCE_WEIGHTS[evType]);
+      });
+    }
+
+    if (hasSamlSignal) {
+      // SAML Specific Logic (Beta)
+      // Base confidence 0.4. Context can raise it, but mapped to max 0.6 in state mapping.
+      // We define a synthetic weight for SAML_FORM if not in standard weights (0.4)
+      addEvidenceOnce(confState, EVIDENCE_TYPES.SAML_FORM, 0.4); 
+    }
 
     // 3.2 RP Inference: Gather Candidates
     const rpFromRedirect = inferRpFromRedirectUri(url);
@@ -147,12 +161,23 @@ export async function classify(url, explicitSignals = [], context = {}) {
 
     // 3.7 Merge into Result
     result.level = ActivityLevels.ACCOUNT;
-    result.confidence = confidence >= 0.8 ? "high" : (confidence >= 0.5 ? "medium" : "low");
-    result.numericConfidence = confidence; // Important for Risk Model
-    result.reasons.push("oauth_detected");
+    
+    // SAML Cap: If strictly relying on SAML without other strong context, cap confidence
+    // (This is implicitly handled by weights, but good to be explicit for Beta features)
+    let finalConfidence = confidence;
+    if (hasSamlSignal && !evidenceFlags.includes(EVIDENCE_TYPES.TEMPORAL_CHAIN) && !evidenceFlags.includes(EVIDENCE_TYPES.REDIRECT_URI_MATCH)) {
+       // Cap single-factor SAML to Medium confidence max
+       finalConfidence = Math.min(confidence, 0.6);
+    }
+
+    result.confidence = finalConfidence >= 0.8 ? "high" : (finalConfidence >= 0.5 ? "medium" : "low");
+    result.numericConfidence = finalConfidence; 
+    result.reasons.push(hasSamlSignal ? "saml_detected" : "oauth_detected");
     result.evidenceFlags = evidenceFlags;
     
     // Add inferred metadata
+    // Recommended Fix 3.2: Use explicitly inferred RP over candidate if available in result (future proofing), 
+    // but here we are setting it.
     if (rpCandidate) result.rp_domain = rpCandidate;
     if (idpCandidate) result.idp_domain = idpCandidate;
 
@@ -189,12 +214,15 @@ export async function classify(url, explicitSignals = [], context = {}) {
   result.risk_confidence = computeRiskConfidence({ confidence: result.numericConfidence });
 
   // 4.2 Management State
+  // Fix 3.2: Prefer result.rp_domain if already set (e.g. by future DOM logic), fallback to OAuth candidate
+  const finalRp = result.rp_domain || rpCandidate;
+
   result.management_state = mapToManagementState({
     level: result.level,
     score: result.risk_score,
     confidence: result.numericConfidence,
-    rp_domain: rpCandidate,
-    evidenceFlags: result.evidenceFlags, // Fixed: Pass flags for Suggested logic
+    rp_domain: finalRp,
+    evidenceFlags: result.evidenceFlags,
     seenCount: context.visitCount || 0,
     isPinned: context.isPinned || false
   });
@@ -202,7 +230,7 @@ export async function classify(url, explicitSignals = [], context = {}) {
   // 4.3 Explanation
   result.explanation = buildExplanation({
     evidenceFlags: result.evidenceFlags,
-    rp_domain: rpCandidate,
+    rp_domain: finalRp,
     idp_domain: idpCandidate
   });
 
