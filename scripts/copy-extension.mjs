@@ -26,11 +26,13 @@ function copyDir(srcDir, dstDir) {
 const REQUIRED_FILES = [
   "manifest.json",
   "service_worker.js",
+  "metadata.json"
 ];
 
 const REQUIRED_DIRS = [
   "content",
   "jobs",
+  "risk",
   "storage",
   "signals",
   "ui",
