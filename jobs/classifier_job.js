@@ -8,7 +8,7 @@ import { ActivityLevels } from '../signals/activity_levels.js';
 import { EVIDENCE_TYPES } from '../signals/evidence_types.js';
 
 // Chapter 2 Imports
-import { OAUTH_CORE_KEYS, KNOWN_IDP_PATTERNS } from '../signals/oauth_constants.js';
+import { OAUTH_CORE_KEYS, KNOWN_IDP_DOMAIN_PATTERNS, KNOWN_IDP_URL_PATTERNS } from '../signals/oauth_constants.js';
 import { getParamKeys } from '../utils/url_params.js';
 import { isStrongAuthPath } from '../utils/url_path.js';
 import { getDomain } from '../utils/domain.js';
@@ -32,10 +32,7 @@ function detectOAuth(url) {
 
   if (matchCount >= 2) {
     isOAuth = true;
-    // We don't have a specific evidence type for Params in Ch0, 
-    // usually falls under 'transition_qualifiers' or implied context, 
-    // but Strong Path is the closest strong contract if path matches. 
-    // For params-only, we treat it as strong signal for classification.
+    evidence.push(EVIDENCE_TYPES.OAUTH_PARAMS);
   }
 
   // 2. Strong Path Check
@@ -44,15 +41,21 @@ function detectOAuth(url) {
     evidence.push(EVIDENCE_TYPES.STRONG_PATH);
   }
 
-  // 3. Known IdP Pattern
+  // 3. Known IdP Pattern (Split Check)
+  // A. Domain Check
   const domain = getDomain(url);
   if (domain) {
-    // Check if domain matches known IdPs
-    const isIdP = KNOWN_IDP_PATTERNS.some(pattern => pattern.test(domain) || pattern.test(url));
-    if (isIdP) {
-      isOAuth = true; // Candidates for Auth flow
-      // Note: IdP alone is usually 'strong_path' evidence contextually
+    const isIdPDomain = KNOWN_IDP_DOMAIN_PATTERNS.some(pattern => pattern.test(domain));
+    if (isIdPDomain) {
+      isOAuth = true;
+      // IdP match is contextual, but usually implies strong path/auth intent
     }
+  }
+
+  // B. URL Check (Specific Paths on Generic Domains)
+  const isIdPUrl = KNOWN_IDP_URL_PATTERNS.some(pattern => pattern.test(url));
+  if (isIdPUrl) {
+    isOAuth = true;
   }
 
   return { isOAuth, evidence };
@@ -94,33 +97,28 @@ export function classify(url, explicitSignals = []) {
     }
   } else {
     // Keyword Guard (Downgrade Rule)
-    // If Heuristics said ACCOUNT based ONLY on weak keywords ("login", "auth"), 
-    // but strict OAuth rules failed, we assume it might be a false positive (e.g. /author).
+    // If Heuristics predicted ACCOUNT, we must check if it relied ONLY on weak URL keywords.
+    // If Strict OAuth Check failed AND no DOM signals exist, we treat it as a potential false positive (e.g. /author).
     
     if (result.level === ActivityLevels.ACCOUNT) {
-       // Check if reasons implies it relied on URL keywords
-       const reliesOnUrl = result.reasons.some(r => r === SIGNAL_CODES.URL_LOGIN || r === SIGNAL_CODES.URL_ACCOUNT);
+       // A. Check if reasons are exclusively URL-based keywords
+       // We ignore DOM_PASSWORD or explicit content script signals here.
+       const weakUrlReasons = [SIGNAL_CODES.URL_LOGIN, SIGNAL_CODES.URL_ACCOUNT, SIGNAL_CODES.URL_SIGNUP];
+       const reliesOnlyOnWeakUrl = result.reasons.every(r => weakUrlReasons.includes(r));
+       
+       // B. Check for DOM signals (Strong local evidence)
        const hasDomSignals = result.reasons.some(r => r.startsWith('dom_'));
        
-       // If relying purely on URL keywords and NO OAuth confirmation and NO DOM signals
-       if (reliesOnUrl && !hasDomSignals) {
-          // Soften the classification
-          // Instead of "High" confidence Account, we treat as "Medium" or downgrade to VIEW if ambiguous.
+       if (reliesOnlyOnWeakUrl && !hasDomSignals) {
+          // Downgrade Logic
+          // Without structural OAuth proof (params/strong-path) or DOM proof (password field),
+          // a URL containing "login" or "account" is suggestive but not definitive enough 
+          // to be classified as High Confidence Account Activity in this strict mode.
           
-          // Heuristic Protection:
-          // '/author' contains 'auth', but not 'login'.
-          // 'extractUrlSignals' maps 'auth' -> URL_LOGIN.
-          // We manually check for the "author" false positive here since we can't change heuristics.js easily.
-          const lowerPath = url.toLowerCase();
-          if (lowerPath.includes('/author') && !lowerPath.includes('/authorize')) {
-             result.level = ActivityLevels.VIEW;
-             result.confidence = "high"; // Confidently NOT account
-             result.reasons = [SIGNAL_CODES.PASSIVE];
-          } else {
-             // Just "auth" or "login" without strict params? 
-             // Treat as neutral/weak. Downgrade confidence.
-             result.confidence = "low";
-          }
+          // Downgrade to VIEW to be safe (avoiding False Positives like /author, /login-help)
+          result.level = ActivityLevels.VIEW;
+          result.confidence = "low";
+          result.reasons = [SIGNAL_CODES.PASSIVE, "ambiguous_auth_keyword"];
        }
     }
   }

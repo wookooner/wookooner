@@ -27,14 +27,19 @@ export const OAUTH_STRONG_PATHS = new Set([
   '/.well-known/openid-configuration'
 ]);
 
-export const KNOWN_IDP_PATTERNS = [
+// 1. Domain Patterns: Matches strict hostname (handling subdomains via regex)
+export const KNOWN_IDP_DOMAIN_PATTERNS = [
   /^accounts\.google\.com$/,
   /^login\.microsoftonline\.com$/,
   /^appleid\.apple\.com$/,
-  /^auth0\.com$/,
-  /^okta\.com$/,
-  /^id\.twitch\.tv$/,
-  /^github\.com\/login\/oauth/ // Special case: path included in pattern
+  /(^|\.)auth0\.com$/,  // Matches auth0.com and tenant.auth0.com
+  /(^|\.)okta\.com$/,   // Matches okta.com and myorg.okta.com
+  /^id\.twitch\.tv$/
+];
+
+// 2. URL Patterns: Matches specific full-path signatures
+export const KNOWN_IDP_URL_PATTERNS = [
+  /^https:\/\/github\.com\/login\/oauth/
 ];
 
 // Keywords that are considered WEAK/NEUTRAL without other evidence
