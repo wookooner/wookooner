@@ -3,7 +3,7 @@
 // Logic: Hard/Soft separation, sorting rules
 
 import { ActivityLevels } from '../signals/activity_levels.js';
-import { isManaged, isSurfaced } from '../storage/management_state.js';
+import { MANAGEMENT_STATE, isManaged } from '../storage/management_state.js';
 
 /**
  * Priorities for Hard List sorting
@@ -81,15 +81,13 @@ export function buildSoftList(domainStates, activityStates, riskStates, override
       // Logic: Must be surfaced (Review/Suggested/Pinned) but NOT Managed (Suggested/Pinned)
       // AND not ignored.
       // Essentially: state === NEEDS_REVIEW
-      // Note: We also support the legacy threshold for fallback or user settings adjustment logic if needed, 
-      // but strictly following Chapter 4, we use the state.
       
       // For MVP transition: If state exists, use it. If not, fallback to legacy view check.
       if (state) {
-        return !isIgnored && state === 'needs_review';
+        return !isIgnored && state === MANAGEMENT_STATE.NEEDS_REVIEW;
       }
       
-      // Legacy Fallback
+      // Legacy Fallback (keeping for robustness during data migration)
       return !isIgnored && 
              activity?.last_estimation_level === ActivityLevels.VIEW &&
              (riskStates[domain]?.score || 0) >= threshold;

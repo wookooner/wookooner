@@ -194,8 +194,9 @@ export async function classify(url, explicitSignals = [], context = {}) {
     score: result.risk_score,
     confidence: result.numericConfidence,
     rp_domain: rpCandidate,
+    evidenceFlags: result.evidenceFlags, // Fixed: Pass flags for Suggested logic
     seenCount: context.visitCount || 0,
-    isPinned: context.isPinned || false // Passed from context if needed, or handled in storage
+    isPinned: context.isPinned || false
   });
 
   // 4.3 Explanation
